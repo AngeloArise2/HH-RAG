@@ -37,5 +37,9 @@ class MetadataAwareChunker:
         for c in chunks:
             c.metadata["inner_strategy"] = c.metadata.get("strategy")
             c.metadata["strategy"] = STRATEGY_NAME
+            # re-mint chunk_id under OUR registered name (inner ids say e.g.
+            # "-semantic-") so ids stay collision-free if strategies ever share
+            # one store; position index is already in metadata from the inner
+            c.chunk_id = f"{c.doc_id}-{STRATEGY_NAME}-{c.metadata['position']}"
             c.metadata.update({f"doc_{k}": v for k, v in doc_fields.items()})
         return chunks

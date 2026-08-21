@@ -51,6 +51,17 @@ def test_chunk_texts_identical_to_unwrapped_inner():
     assert [c.end_offset for c in wrapped_chunks] == [c.end_offset for c in inner_chunks]
 
 
+def test_chunk_ids_reminted_under_wrapper_strategy():
+    wrapped = MetadataAwareChunker(inner=SemanticChunker())
+    chunks = wrapped.chunk(_doc())
+    assert chunks
+    for c in chunks:
+        assert c.chunk_id.startswith(f"{c.doc_id}-metadata_aware-")
+        assert "-semantic-" not in c.chunk_id
+    ids = [c.chunk_id for c in chunks]
+    assert len(set(ids)) == len(ids)  # unique within document
+
+
 def test_deterministic_output():
     run_a = MetadataAwareChunker(inner=SemanticChunker()).chunk(_doc())
     run_b = MetadataAwareChunker(inner=SemanticChunker()).chunk(_doc())

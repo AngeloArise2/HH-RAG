@@ -65,6 +65,11 @@ class SemanticChunker:
             flush()
 
         chunks = make_chunks(document, strategy=STRATEGY_NAME, pieces=pieces)
+        # make_chunks drops empty spans defensively; sentence_spans pre-filters
+        # blanks so today lengths always match — fail loudly if that ever drifts.
+        assert len(chunks) == len(oversized_flags), (
+            f"chunk/flag misalignment: {len(chunks)} chunks vs {len(oversized_flags)} flags"
+        )
         for chunk, oversized in zip(chunks, oversized_flags):
             if oversized:
                 chunk.metadata["oversized_sentence"] = True
