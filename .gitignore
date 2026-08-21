@@ -1,6 +1,8 @@
 .env
 backend/data/*
 !backend/data/.gitkeep
+# committed on purpose: ships the retrieval index inside the Docker build
+!backend/data/index_snapshot.tgz
 __pycache__/
 *.pyc
 .venv/
@@ -8,3 +10,4 @@ node_modules/
 dist/
 .DS_Store
 videos/raw/
+.vscode/

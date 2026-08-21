@@ -1,11 +1,15 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.benchmarking.latency import LatencyTrace, STT as STT_STAGE, stage_timer
+from app.config import get_settings
 from app.harness.orchestrator import AskResponse, PipelineError, run_pipeline
 from app.retrieval.retriever import warm_retrieval
 from app.stt.base import STTError, STTProvider
@@ -27,6 +31,17 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="voice-rag", version="0.1.0", lifespan=lifespan)
+
+# Dev convenience only: when the frontend is served by THIS service (prod),
+# requests are same-origin and CORS never triggers. The Vite dev server runs
+# on :5173, so that origin (plus anything configured) gets allowed here.
+_origins = [o.strip() for o in get_settings().cors_origins.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # providers' sync STT endpoints accept ~30s clips; reject anything absurd
 # before it burns a network call (Sarvam 400s on oversized bodies anyway)
@@ -123,3 +138,12 @@ async def ask(
     except PipelineError as exc:
         # stage can't proceed — structured 502, not a stack trace
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+# --- frontend serving (single-service deploy) --------------------------------
+# Mounted LAST so /ask, /transcribe and /health always match first. Only
+# active when a built frontend exists (docker image or `npm run build`
+# locally); absent dir = pure-API mode for tests/dev.
+_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if _DIST_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(_DIST_DIR), html=True), name="frontend")

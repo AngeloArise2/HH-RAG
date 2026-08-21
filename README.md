@@ -1,3 +1,10 @@
+---
+title: voice-rag
+emoji: 🎙️
+sdk: docker
+app_port: 7860
+---
+
 # HH Goa 2026 — Voice-Enabled RAG
 
 A voice-in, voice-question, grounded-answer-out RAG pipeline: **audio → speech-to-text → multi-strategy chunked retrieval over a vector DB → guardrailed answer generation**, built for the HH Goa 2026 shortlisting task on `ai4bharat/MSMARCO-XI`.
@@ -112,16 +119,41 @@ The task specifies a **sub-200ms** target for "chunking + vector DB retrieval + 
 
 ## STT provider
 
-This project uses **[Sarvam / ElevenLabs — fill in once decided, see PREREQUISITES.md]**, per the task's "pick one" requirement. Both providers are implemented behind a common interface in `backend/app/stt/` for flexibility during development, but only the configured one (`STT_PROVIDER` in `.env`) is used at runtime.
+This project uses **Sarvam** (`STT_PROVIDER=sarvam` in `.env`), per the task's "pick one" requirement. Both Sarvam and ElevenLabs are implemented behind a common interface in `backend/app/stt/` for flexibility, but only the configured one is used at runtime.
 
 ## LLM provider
 
-Answer generation uses **Groq** (default, free tier, fast LPU inference — see `PREREQUISITES.md`) with **Gemini** as a config-swap fallback if rate limits get tight. Both live behind one interface in `backend/app/generation/llm_client.py`.
+Answer generation uses **Groq** (`openai/gpt-oss-20b` — the free-tier fast general model as of Aug 2026) with **Gemini** as a config-swap fallback if rate limits get tight. Both live behind one interface in `backend/app/generation/llm_client.py`.
 
 ## Deployment
 
-Backend: **[fill in once deployed — Render / Railway / Fly.io]** → live URL: **[fill in]**
-Frontend: **[fill in if separately deployed]**
+Live at: **[fill in real Space URL after deploy]** — deployed as a Hugging Face Space running this repo's `Dockerfile` verbatim.
+
+Why HF Spaces and not Render/Railway/Fly (measured, not guessed): the container idles at ~480MB *anonymous* memory (torch runtime + MiniLM + interpreter — verified inside the built image; `MALLOC_ARENA_MAX`/thread-cap mitigations moved it <2%). Render's free tier caps at 512MB total → guaranteed OOM before the first request. Spaces' free CPU tier provides 16GB, no card required, same image. Tradeoffs accepted and documented: the Space sleeps after ~48h idle (first visit pays a ~1min cold boot: container start + MiniLM warmup) — hit `/health` once before demoing.
+
+Deploy steps (what was actually done):
+
+```bash
+# 0) index snapshot must be committed (it ships INSIDE the docker build,
+#    so deploys never download the dataset or re-embed):
+#    .venv/bin/python scripts/export_index_snapshot.py   # → backend/data/index_snapshot.tgz (~33MB)
+
+# 1) one-time human steps: huggingface.co account → Settings → Access Tokens →
+#    create a WRITE token; hf.co/new-space → name "voice-rag", SDK=Docker, public
+
+# 2) push the repo to the Space
+git remote add space https://huggingface.co/spaces/<your-username>/voice-rag
+git push space main        # token = password when prompted
+
+# 3) Space → Settings → Variables and secrets → add GROQ_API_KEY, SARVAM_API_KEY
+
+# 4) watch the build logs (first build ~6-8 min: CPU torch + deps + weights bake),
+#    then verify:
+curl https://<your-space-subdomain>.hf.space/health
+```
+
+The frontend is served by the backend itself from `frontend/dist` (same-origin, single service) — record voice or type a question at the Space URL root.
+
 
 ## Team & workflow
 

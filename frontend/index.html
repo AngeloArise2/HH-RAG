@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>voice-rag</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>voice-rag</h1>
+      <p class="sub">Ask a question about the MSMARCO corpus by voice — or type it below.</p>
+
+      <section class="controls">
+        <button id="record-btn" type="button">🎙 Start recording</button>
+        <span id="status" role="status">idle</span>
+      </section>
+
+      <section class="text-fallback">
+        <input id="text-query" type="text" placeholder='e.g. "what is the definition of a sole proprietorship?"' />
+        <button id="send-btn" type="button">Ask</button>
+      </section>
+
+      <div id="error-box" class="banner error hidden"></div>
+
+      <section id="result" class="hidden">
+        <h2>Transcript</h2>
+        <p id="transcript" class="quote">(no audio submitted)</p>
+
+        <h2>Answer</h2>
+        <div id="refusal-banner" class="banner warn hidden"></div>
+        <div id="unverified-banner" class="banner warn hidden">
+          ⚠️ Grounding judge was unavailable for this answer — treat it as unverified.
+        </div>
+        <p id="answer"></p>
+
+        <details id="warnings-wrap" class="hidden">
+          <summary>Warnings</summary>
+          <ul id="warnings"></ul>
+        </details>
+
+        <h2>Latency breakdown</h2>
+        <table id="latency-table">
+          <thead><tr><th>stage</th><th>ms</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
