@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     # --- Vector store ---
     vector_store_path: str = str(_REPO_ROOT / "backend" / "data" / "index")
 
+    # --- Dataset ingestion ---
+    dataset_name: str = "ai4bharat/MSMARCO-XI"
+    dataset_language: str = "hin"
+    dataset_split: str = "validation"
+    max_raw_rows: int = 10000
+    min_passage_chars: int = 30
+
+    raw_data_dir: Path = _REPO_ROOT / "backend" / "data" / "raw"
+    processed_data_dir: Path = _REPO_ROOT / "backend" / "data" / "processed"
+
 
 @lru_cache
 def get_settings() -> Settings:

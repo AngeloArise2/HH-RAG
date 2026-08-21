@@ -23,10 +23,10 @@ Two jobs: (1) a checklist to tick off as you complete each `BUILD_PROMPT.md` pha
 - [x] `.gitignore` excludes `.env`, `backend/data/*`, `__pycache__`
 
 ### Phase 1 — Dataset ingestion
-- [ ] Real subset of `ai4bharat/MSMARCO-XI` downloaded, not simulated
-- [ ] Real row count / stats reported (not guessed)
-- [ ] `processed/passages.jsonl` has unique `doc_id`s, no empty passages
-- [ ] Test passes
+- [x] Real subset of `ai4bharat/MSMARCO-XI` downloaded, not simulated
+- [x] Real row count / stats reported (not guessed)
+- [x] `processed/passages.jsonl` has unique `doc_id`s, no empty passages
+- [x] Test passes
 
 ### Phase 2 — Multi-strategy chunking
 - [ ] 4 strategies exist: fixed-size, fixed-size+overlap, semantic, metadata-aware

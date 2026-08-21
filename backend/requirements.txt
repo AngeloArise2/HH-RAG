@@ -1,3 +1,4 @@
+datasets
 fastapi
 uvicorn
 pydantic-settings
