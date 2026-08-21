@@ -29,10 +29,10 @@ Two jobs: (1) a checklist to tick off as you complete each `BUILD_PROMPT.md` pha
 - [x] Test passes
 
 ### Phase 2 — Multi-strategy chunking
-- [ ] 4 strategies exist: fixed-size, fixed-size+overlap, semantic, metadata-aware
-- [ ] All implement one common `Chunker` interface
-- [ ] Per-strategy tests pass (no empty chunks, max length respected, overlap correct)
-- [ ] Preview script shows real, visibly different output per strategy
+- [x] 4 strategies exist: fixed-size, fixed-size+overlap, semantic, metadata-aware
+- [x] All implement one common `Chunker` interface
+- [x] Per-strategy tests pass (no empty chunks, max length respected, overlap correct)
+- [x] Preview script shows real, visibly different output per strategy
 
 ### Phase 3 — Embedding + vector index
 - [ ] Local embedding model chosen and justified (no network hop in hot path)
