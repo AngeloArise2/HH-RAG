@@ -46,3 +46,21 @@ passages per query row this lands ~10k processed passages, inside the
   retrieval-quality eval later without any extra labeling work.
 - **Stable ids:** `doc_id = sha1(cleaned_text)[:16]`, assigned at preprocess
   time, so identical passages dedupe across query rows and ids survive re-runs.
+
+## Guardrail failure policy: fail-open, surfaced — a deliberate decision
+
+When the grounding-judge LLM call fails (Groq 429s, timeouts, empty completions
+— all observed live during phase 8 benchmarking), the pipeline does NOT block:
+the generated answer is still returned with `AskResponse.grounding_verified=False`
+and the real exception message preserved in `warnings[]`, instead of refusing.
+This is availability-over-hard-blocking by choice: a transient hosted-API
+outage in a *checker* should not take down answers from a pipeline whose other
+stages succeeded, and silently dropping the answer would be indistinguishable
+from an outage of the whole system. The caveat is structured, not string-matched:
+`grounding_verified` and `refused` are independent fields covering different
+failure modes — `refused=True` means a guard deliberately blocked an answer;
+`grounding_verified=False` means an answer IS returned but was never judged.
+They are not two readings of one state, and `grounding_verified` carries no
+meaning when `refused=True` (nothing was generated, so nothing needed judging).
+The input filter has no equivalent flag because its fail-open simply lets the
+request proceed normally — the same tradeoff, applied where the cost is lower.

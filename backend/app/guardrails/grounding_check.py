@@ -29,9 +29,14 @@ logger = logging.getLogger(__name__)
 
 
 class JudgeVerdict(BaseModel):
-    verdict: str  # supported | partial | unsupported
+    verdict: str  # supported | partial | unsupported | "" (no verdict obtained)
     reason: str = ""
     failed_open: bool = False
+    # False ONLY when the judge itself could not produce a verdict (API
+    # failure, unparseable response). The orchestrator surfaces this on
+    # AskResponse.grounding_verified so clients can distinguish "judged and
+    # passed" from "never judged" without string-matching warnings.
+    verified: bool = True
 
 
 JUDGE_SYSTEM = """\
@@ -80,20 +85,29 @@ def check_grounded(answer: str, chunks, llm) -> JudgeVerdict:
         )
     except LLMError as exc:
         logger.warning("grounding_check judge call failed, failing open: %s", exc)
+        # structured fail-open: no verdict obtained, answer passes, and the
+        # orchestrator flags grounding_verified=False on the response
         return JudgeVerdict(
-            verdict="supported", reason=f"guard unavailable: {exc}", failed_open=True
+            verdict="",
+            reason=str(exc)[:200],
+            failed_open=True,
+            verified=False,
         )
 
     verdict = parse_judge_verdict(raw)
     if verdict not in {"supported", "partial", "unsupported"}:
         logger.warning("grounding_check got unparseable response %r, failing open", raw[:80])
         return JudgeVerdict(
-            verdict="supported", reason="guard response unparseable", failed_open=True
+            verdict="",
+            reason=f"guard response unparseable: {raw[:80]}",
+            failed_open=True,
+            verified=False,
         )
     return JudgeVerdict(verdict=verdict)
 
 
 def is_unsupported(verdict: JudgeVerdict) -> bool:
+    # only an explicit UNSUPPORTED trips a refusal; "" (no verdict) passes
     return verdict.verdict == "unsupported"
 
 

@@ -224,12 +224,53 @@ class GuardOutageLLM(FakeLLM):
         raise LLMError("guard API down")
 
 
+class JudgeOnlyOutageLLM(FakeLLM):
+    """Input filter answers normally; the JUDGE call always fails."""
+
+    def complete_raw(self, system, user, max_tokens=16):
+        if "classify" in system.lower():
+            return "ON_TOPIC"
+        raise LLMError("429 rate limit on judge call")
+
+
+def test_judge_outage_returns_answer_with_grounding_verified_false():
+    """Fail-open is an intentional contract, not an unhandled edge: when the
+    judge call dies (429/timeout/empty), the generated answer is STILL
+    returned (refused stays False) but AskResponse.grounding_verified flips
+    False so clients can flag it without string-matching warnings."""
+    llm = JudgeOnlyOutageLLM(answer="the answer we generated")
+    response = run_pipeline(
+        text="what is incorporation", settings=TEST_SETTINGS, llm_provider=llm
+    )
+    assert response.refused is False
+    assert response.grounding_verified is False
+    assert response.answer == "the answer we generated"
+    assert any("failed open" in w.lower() for w in response.warnings)
+    assert any("429" in w for w in response.warnings)  # real reason surfaced
+
+
+def test_input_guard_refusal_keeps_grounding_verified_default_true():
+    """grounding_verified says nothing about a REFUSED response — no answer
+    was ever generated or judged. It must stay at its default True so no
+    client reads it as 'this refusal was verified'."""
+    llm = FakeLLM(filter_verdict="OFF_TOPIC")
+    response = run_pipeline(
+        text="tell me a joke", settings=TEST_SETTINGS, llm_provider=llm
+    )
+    assert response.refused is True
+    assert response.refusal_reason == "off_topic"
+    assert response.grounding_verified is True  # untouched default
+    # and the judge never ran: no generation stage in the trace at all
+    assert "generation" not in response.latency_trace_ms
+
+
 def test_guard_outage_fails_open_with_warning_not_crash():
     llm = GuardOutageLLM()
     response = run_pipeline(
         text="what is incorporation", settings=TEST_SETTINGS, llm_provider=llm
     )
     assert response.refused is False  # fail-open...
+    assert response.grounding_verified is False  # ...but flagged as unverified
     assert any("guard" in w.lower() or "failed" in w.lower() for w in response.warnings)
 
 

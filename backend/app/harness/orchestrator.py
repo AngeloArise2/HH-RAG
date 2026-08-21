@@ -61,12 +61,19 @@ class PipelineError(RuntimeError):
 
 
 class AskResponse(BaseModel):
-    """Structured end-to-end response — no dict grab-bag."""
+    """Structured end-to-end response — no dict grab-bag.
+
+    grounding_verified and refused are INDEPENDENT fields covering different
+    failure modes: refused=True means a guard deliberately blocked the answer;
+    grounding_verified=False means an answer IS returned but the judge could
+    not verify it (guard outage). Only meaningful when refused=False.
+    """
 
     transcript: str
     answer: str
     refused: bool = False
     refusal_reason: str | None = None
+    grounding_verified: bool = True
     chunks: list[RetrievedChunk]
     latency_trace_ms: dict[str, float]
     retrieval_ms: float
@@ -191,11 +198,18 @@ def run_pipeline(
     # --- stage 5: GROUNDING GUARD — after generation, before assembly ---
     refused = False
     refusal_reason_str = None
+    grounding_verified = True  # only flips when a judge ran and could not verify
     if generation is not None and answer:
         with stage_timer(GUARDRAIL_CHECK, trace):
             judge = check_grounded(answer, chunks, llm)
-        if judge.failed_open:
+        if not judge.verified:
+            grounding_verified = False
             warnings.append(f"grounding check failed open: {judge.reason}")
+        if judge.failed_open:
+            logger.warning(
+                "grounding judge unavailable for %r — answer returned unverified",
+                query[:80],
+            )
         if is_unsupported(judge):
             logger.warning("grounding judge rejected answer for %r", query[:80])
             warnings.append(
@@ -210,6 +224,7 @@ def run_pipeline(
         answer=answer,
         refused=refused,
         refusal_reason=refusal_reason_str,
+        grounding_verified=grounding_verified,
         chunks=chunks,
         latency_trace_ms=trace.stage_ms,
         retrieval_ms=trace.retrieval_ms(),
