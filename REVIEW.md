@@ -59,11 +59,11 @@ Two jobs: (1) a checklist to tick off as you complete each `BUILD_PROMPT.md` pha
 - [x] Real end-to-end queries run and real answers/latency reported *(Groq openai/gpt-oss-20b, live: incorporation + taxes answered from context; "harry potter" correctly refused with "I don't know based on the provided context"; steady-state retrieval ≈ 24-28ms, generation ≈ 0.8-1.7s, reported separately)*
 
 ### Phase 7 — Guardrails
-- [ ] `input_filter` called before retrieval **inside the orchestrator**, verified in code, not just present as an unused function
-- [ ] `grounding_check` called after generation, before the response is returned
-- [ ] `refused` field + human-readable reason on refusal
-- [ ] Guardrail test suite passes: off-topic, unsafe input, ungrounded-answer, AND in-scope-should-not-refuse cases
-- [ ] No false refusals on the in-scope test cases
+- [x] `input_filter` called before retrieval **inside the orchestrator**, verified in code, not just present as an unused function *(run_pipeline stage 2; live proof: refused queries show only `guardrail_check` in the trace — embed/vector_search never ran)*
+- [x] `grounding_check` called after generation, before the response is returned *(stage 5; unsupported verdict swaps answer for refusal before AskResponse assembly)*
+- [x] `refused` field + human-readable reason on refusal *(AskResponse.refused + refusal_reason + plain-language refusal strings per trip type)*
+- [x] Guardrail test suite passes: off-topic, unsafe input, ungrounded-answer, AND in-scope-should-not-refuse cases *(22 tests in test_guardrails.py: 4 off-topic, 3 in-scope false-refusal checks, 2 unsafe, 2 engineered-ungrounded, plus parser/wiring/fail-open units)*
+- [x] No false refusals on the in-scope test cases *(0/3 live and offline; live run also verified real LLM guards: gpt-oss needed reasoning_effort=low + larger token budget or guard calls came back empty)*
 
 ### Phase 8 — Latency benchmarking
 - [ ] `docs/latency_report.md` has real P50/P70/P100 from a real run (≥30-50 queries)

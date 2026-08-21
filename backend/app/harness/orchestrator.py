@@ -1,12 +1,19 @@
-"""The real pipeline: audio-or-text in -> STT -> retrieval -> generation out.
+"""The real pipeline: audio-or-text in -> STT -> guard -> retrieval ->
+generation -> grounding guard -> out.
 
-Stage policy (deliberate, per BUILD_PROMPT phase 6):
+Stage policy (deliberate, per BUILD_PROMPT phases 6-7):
 - STT failure is FATAL: no transcript means no query means nothing to serve.
   Raised as PipelineError so the endpoint can return a clear structured error.
-- Retrieval failure is FATAL for the same reason (an ungrounded answer is the
-  exact failure mode this system exists to prevent).
+- INPUT GUARD (off-topic/unsafe) runs BEFORE retrieval and short-circuits the
+  request on a trip — no embedding, no vector search, no generation.
+- Retrieval failure is FATAL for grounding reasons (no context = no honest
+  answer); empty-but-successful retrieval short-circuits to a deterministic
+  don't-know refusal without burning an LLM call.
 - Generation failure DEGRADES: the retrieved chunks are still real work worth
   returning, so respond with an empty answer + a warning instead of a 500.
+- GROUNDING GUARD runs AFTER generation and BEFORE response assembly; an
+  UNSUPPORTED verdict replaces the answer with a refusal. The fabricated
+  text is never returned to the caller — it stays in warnings only if at all.
 - Missing chunk metadata is a WARNING, never a crash.
 
 Every stage runs under stage_timer; the retriever's internal sub-trace is
@@ -17,13 +24,22 @@ import logging
 
 from pydantic import BaseModel
 
-from app.benchmarking.latency import GENERATION, STT, LatencyTrace, stage_timer
+from app.benchmarking.latency import (
+    GENERATION,
+    GUARDRAIL_CHECK,
+    STT,
+    LatencyTrace,
+    stage_timer,
+)
 from app.config import Settings, get_settings
 from app.generation.llm_client import (
     GenerationResult,
     LLMError,
     get_llm_provider,
 )
+from app.guardrails.grounding_check import check_grounded, is_unsupported
+from app.guardrails.input_filter import GuardVerdict, classify_input, is_refusal
+from app.guardrails.refusal import refusal_for
 from app.retrieval.retriever import Retriever
 from app.retrieval.vector_store import RetrievedChunk
 from app.stt.base import STTError, TranscriptResult
@@ -49,6 +65,8 @@ class AskResponse(BaseModel):
 
     transcript: str
     answer: str
+    refused: bool = False
+    refusal_reason: str | None = None
     chunks: list[RetrievedChunk]
     latency_trace_ms: dict[str, float]
     retrieval_ms: float
@@ -109,7 +127,37 @@ def run_pipeline(
 
     query = transcript_result.text
 
-    # --- stage 2: retrieval (embed + vector search, internally timed) ---
+    # resolve the LLM provider once; guards + generation share it
+    llm = llm_provider or get_llm_provider(settings)
+    llm_name = getattr(llm, "provider_name", None) or type(llm).__name__.replace(
+        "LLM", ""
+    ).lower()
+    llm_model = getattr(llm, "model", getattr(llm, "_model_name", "unknown"))
+
+    # --- stage 2: INPUT GUARD — off-topic/unsafe, before any retrieval work ---
+    with stage_timer(GUARDRAIL_CHECK, trace):
+        input_verdict: GuardVerdict = classify_input(query, llm)
+    if input_verdict.failed_open:
+        warnings.append(f"input filter failed open: {input_verdict.reason}")
+    if is_refusal(input_verdict):
+        logger.info("input guard tripped (%s): %s", input_verdict.verdict, query[:80])
+        return AskResponse(
+            transcript=query,
+            answer=refusal_for(input_verdict.verdict),
+            refused=True,
+            refusal_reason=input_verdict.verdict,
+            chunks=[],
+            latency_trace_ms=trace.stage_ms,
+            retrieval_ms=trace.retrieval_ms(),
+            total_ms=trace.total_ms(),
+            warnings=[f"input filter refused the query ({input_verdict.verdict})"],
+            llm_provider=llm_name,
+            llm_model=llm_model,
+            llm_is_mock=type(llm).__name__ == "MockLLM",
+            stt_is_mock=stt_is_mock,
+        )
+
+    # --- stage 3: retrieval (embed + vector search, internally timed) ---
     retriever = Retriever(settings=settings)
     try:
         retrieval = retriever.retrieve(query)
@@ -119,15 +167,9 @@ def run_pipeline(
 
     chunks = retrieval.chunks
     _warn_on_missing_metadata(chunks, warnings)
-    if not chunks:
-        warnings.append("no context retrieved for this query")
 
-    # --- stage 3: generation over the strict grounded prompt ---
-    llm = llm_provider or get_llm_provider(settings)
+    # --- stage 4: generation over the strict grounded prompt ---
     llm_is_mock = type(llm).__name__ == "MockLLM"
-    llm_name = getattr(llm, "provider_name", None) or type(llm).__name__.replace(
-        "LLM", ""
-    ).lower()
     answer = ""
     generation: GenerationResult | None = None
     if not chunks:
@@ -146,17 +188,35 @@ def run_pipeline(
             logger.warning(msg)
             warnings.append(msg)
 
-    assert generation is None or isinstance(generation, GenerationResult)
+    # --- stage 5: GROUNDING GUARD — after generation, before assembly ---
+    refused = False
+    refusal_reason_str = None
+    if generation is not None and answer:
+        with stage_timer(GUARDRAIL_CHECK, trace):
+            judge = check_grounded(answer, chunks, llm)
+        if judge.failed_open:
+            warnings.append(f"grounding check failed open: {judge.reason}")
+        if is_unsupported(judge):
+            logger.warning("grounding judge rejected answer for %r", query[:80])
+            warnings.append(
+                f"grounding check rejected the generated answer ({judge.reason or 'unsupported'})"
+            )
+            answer = refusal_for("ungrounded")
+            refused = True
+            refusal_reason_str = "ungrounded"
+
     return AskResponse(
         transcript=query,
         answer=answer,
+        refused=refused,
+        refusal_reason=refusal_reason_str,
         chunks=chunks,
         latency_trace_ms=trace.stage_ms,
         retrieval_ms=trace.retrieval_ms(),
         total_ms=trace.total_ms(),
         warnings=warnings,
         llm_provider=llm_name,
-        llm_model=getattr(llm, "model", getattr(llm, "_model_name", "unknown")),
+        llm_model=llm_model,
         llm_is_mock=llm_is_mock,
         stt_is_mock=stt_is_mock,
     )

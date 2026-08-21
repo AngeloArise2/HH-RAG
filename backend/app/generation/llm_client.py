@@ -104,6 +104,8 @@ def _chat_with_retry(send_once: Callable[[], str]) -> str:
 class LLMProvider(Protocol):
     def generate(self, prompt: str, context_chunks: list[RetrievedChunk]) -> GenerationResult: ...
 
+    def complete_raw(self, system: str, user: str, max_tokens: int = 16) -> str: ...
+
 
 class GroqLLM:
     """OpenAI-SDK client pointed at Groq's compatible endpoint."""
@@ -116,11 +118,16 @@ class GroqLLM:
         model: str = "llama-3.3-70b-versatile",
         timeout_seconds: float = 30.0,
         http_transport: httpx.BaseTransport | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("GroqLLM requires an API key")
         self.model = model
         self.timeout_seconds = timeout_seconds
+        # reasoning models (gpt-oss family) burn tokens thinking before the
+        # answer; without this knob + enough max_tokens the content comes
+        # back EMPTY (all tokens consumed by reasoning, finish_reason=length)
+        self.reasoning_effort = reasoning_effort
         self._transport = http_transport  # injectable for tests; None in prod
         self._client = OpenAI(
             api_key=api_key,
@@ -132,6 +139,12 @@ class GroqLLM:
             else None,
         )
 
+    def _completion_kwargs(self, max_tokens: int) -> dict:
+        kwargs = {"temperature": 0.0, "max_tokens": max_tokens}
+        if self.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        return kwargs
+
     def generate(self, prompt: str, context_chunks: list[RetrievedChunk]) -> GenerationResult:
         messages = build_messages(prompt, context_chunks)
 
@@ -140,8 +153,7 @@ class GroqLLM:
                 response = self._client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=0.0,  # grounded QA: determinism beats creativity
-                    max_tokens=512,
+                    **self._completion_kwargs(512),
                 )
             except Exception as exc:  # SDK boundary -> typed failure taxonomy
                 raise classify_sdk_error(exc) from exc
@@ -155,6 +167,30 @@ class GroqLLM:
 
         answer = _chat_with_retry(send_once=send_once)
         return GenerationResult(answer=answer, provider="groq", model=self.model)
+
+    def complete_raw(self, system: str, user: str, max_tokens: int = 16) -> str:
+        """Bare completion under an arbitrary system prompt (guardrails use
+        this; generate() is reserved for the grounded-QA template)."""
+
+        def send_once() -> str:
+            try:
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    **self._completion_kwargs(max_tokens),
+                )
+            except Exception as exc:
+                raise classify_sdk_error(exc) from exc
+            choice = response.choices[0] if response.choices else None
+            content = (choice.message.content or "").strip() if choice else ""
+            if not content:
+                raise LLMError("model returned an empty completion")
+            return content
+
+        return _chat_with_retry(send_once=send_once)
 
 
 class GeminiLLM:
@@ -208,6 +244,27 @@ class GeminiLLM:
         answer = _chat_with_retry(send_once=send_once)
         return GenerationResult(answer=answer, provider="gemini", model=self._model_name)
 
+    def complete_raw(self, system: str, user: str, max_tokens: int = 16) -> str:
+        def send_once() -> str:
+            try:
+                response = self._client.models.generate_content(
+                    model=self._model_name,
+                    contents=user,
+                    config={
+                        "system_instruction": system,
+                        "temperature": 0.0,
+                        "max_output_tokens": max_tokens,
+                    },
+                )
+            except Exception as exc:
+                raise classify_sdk_error(exc) from exc
+            text = (getattr(response, "text", None) or "").strip()
+            if not text:
+                raise LLMError("model returned an empty completion")
+            return text
+
+        return _chat_with_retry(send_once=send_once)
+
 
 class MockLLM:
     """Deterministic offline generation for dev/tests — extracts from context.
@@ -235,6 +292,11 @@ class MockLLM:
             answer=answer, provider="mock", model=self.model, is_mock=True
         )
 
+    def complete_raw(self, system: str, user: str, max_tokens: int = 16) -> str:
+        # deterministic pass-open verdicts: mock mode is for building, not for
+        # exercising refusal paths (tests inject their own guard LLMs)
+        return "ON_TOPIC" if "classify" in system.lower() else "SUPPORTED"
+
 
 def get_llm_provider(settings: Settings | None = None):
     """Same policy as the STT factory: missing key degrades to MOCK loudly;
@@ -246,7 +308,11 @@ def get_llm_provider(settings: Settings | None = None):
         return MockLLM()
     if name == "groq":
         if settings.groq_api_key:
-            return GroqLLM(api_key=settings.groq_api_key, model=settings.groq_model)
+            return GroqLLM(
+                api_key=settings.groq_api_key,
+                model=settings.groq_model,
+                reasoning_effort="low" if "gpt-oss" in settings.groq_model.lower() else None,
+            )
         logger.warning("LLM_PROVIDER=groq but GROQ_API_KEY is empty — using MOCK LLM")
         return MockLLM()
     if name == "gemini":

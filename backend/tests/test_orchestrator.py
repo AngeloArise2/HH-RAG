@@ -21,12 +21,26 @@ TEST_SETTINGS = Settings(default_chunk_strategy="metadata_aware")
 class FakeLLM:
     """Deterministic stand-in that records what it was given."""
 
-    def __init__(self, answer: str = "a grounded answer", fail: bool = False):
+    def __init__(
+        self,
+        answer: str = "a grounded answer",
+        fail: bool = False,
+        filter_verdict: str = "ON_TOPIC",
+        judge_verdict: str = "SUPPORTED",
+    ):
         self.answer = answer
         self.fail = fail
+        self.filter_verdict = filter_verdict
+        self.judge_verdict = judge_verdict
         self.last_prompt = None
         self.last_chunks = None
         self.model = "fake"
+        self.provider_name = "fake"
+
+    def complete_raw(self, system: str, user: str, max_tokens: int = 16) -> str:
+        if "classify" in system.lower():
+            return self.filter_verdict
+        return self.judge_verdict
 
     def generate(self, prompt, context_chunks):
         if self.fail:

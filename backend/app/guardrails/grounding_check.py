@@ -1,0 +1,91 @@
+"""Output-side guardrail: is the generated answer actually IN the context?
+
+LLM-as-judge with a strict one-word verdict, run AFTER generation and BEFORE
+the response is assembled. This is the second, independent line of defense —
+the prompt template (prompts.py) is the first. A model that ignores its
+grounding instructions still gets caught here.
+
+Only UNSUPPORTED trips a refusal; PARTIAL passes through (over-refusing
+half-supported answers would make the system unusable).
+
+Failure policy matches input_filter: guard call fails -> fail OPEN with a
+loud warning rather than brick the pipeline on a guard outage.
+"""
+
+import logging
+import re
+
+from pydantic import BaseModel
+
+from app.generation.llm_client import LLMError
+from app.generation.prompts import build_context_block
+from app.guardrails.input_filter import GuardVerdict  # noqa: F401 (shared type)
+from app.guardrails.refusal import UNGROUNDED_REFUSAL
+
+logger = logging.getLogger(__name__)
+
+
+class JudgeVerdict(BaseModel):
+    verdict: str  # supported | partial | unsupported
+    reason: str = ""
+    failed_open: bool = False
+
+
+JUDGE_SYSTEM = """\
+You are a strict grounding judge. You will see numbered context passages \
+and a proposed answer.
+
+Decide whether the answer is factually supported by the passages ONLY:
+- SUPPORTED: every factual claim in the answer appears in, or follows \
+directly from, the context passages.
+- PARTIAL: some claims are grounded but others are not.
+- UNSUPPORTED: the answer contradicts the passages, or its key claims rely \
+on knowledge that is not in them.
+
+Respond with ONLY one word: SUPPORTED, PARTIAL, or UNSUPPORTED."""
+
+# \b word boundaries + longest-token-first alternation: "unsupported" must
+# win over its substring "supported", never the other way round
+_JUDGE_PATTERN = re.compile(r"\b(unsupported|partial|supported)\b")
+
+
+def parse_judge_verdict(text: str) -> str:
+    match = _JUDGE_PATTERN.search(text.lower())
+    return match.group(0) if match else ""
+
+
+def _judge_user_text(answer: str, chunks) -> str:
+    return (
+        f"Context passages:\n{build_context_block(chunks)}\n\n"
+        f"Proposed answer:\n{answer}"
+    )
+
+
+def check_grounded(answer: str, chunks, llm) -> JudgeVerdict:
+    try:
+        raw = llm.complete_raw(
+            JUDGE_SYSTEM,
+            _judge_user_text(answer, chunks),
+            max_tokens=128,
+        )
+    except LLMError as exc:
+        logger.warning("grounding_check judge call failed, failing open: %s", exc)
+        return JudgeVerdict(
+            verdict="supported", reason=f"guard unavailable: {exc}", failed_open=True
+        )
+
+    verdict = parse_judge_verdict(raw)
+    if verdict not in {"supported", "partial", "unsupported"}:
+        logger.warning("grounding_check got unparseable response %r, failing open", raw[:80])
+        return JudgeVerdict(
+            verdict="supported", reason="guard response unparseable", failed_open=True
+        )
+    return JudgeVerdict(verdict=verdict)
+
+
+def is_unsupported(verdict: JudgeVerdict) -> bool:
+    return verdict.verdict == "unsupported"
+
+
+def ungrounded_refusal() -> str:
+    return UNGROUNDED_REFUSAL
