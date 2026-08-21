@@ -108,6 +108,8 @@ class LLMProvider(Protocol):
 class GroqLLM:
     """OpenAI-SDK client pointed at Groq's compatible endpoint."""
 
+    provider_name = "groq"
+
     def __init__(
         self,
         api_key: str,
@@ -158,6 +160,8 @@ class GroqLLM:
 class GeminiLLM:
     """google-genai client; import deferred so Groq-only installs don't need it."""
 
+    provider_name = "gemini"
+
     def __init__(
         self,
         api_key: str,
@@ -178,13 +182,21 @@ class GeminiLLM:
 
     def generate(self, prompt: str, context_chunks: list[RetrievedChunk]) -> GenerationResult:
         messages = build_messages(prompt, context_chunks)
+        # keep the strict grounding rules as a proper system instruction
+        # instead of flattening it into the user turn
+        config = {
+            "temperature": 0.0,
+            "max_output_tokens": 512,
+            "system_instruction": messages[0]["content"],
+        }
+        user_turn = messages[1]["content"]
 
         def send_once() -> str:
             try:
                 response = self._client.models.generate_content(
                     model=self._model_name,
-                    contents=[m["content"] for m in messages],
-                    config={"temperature": 0.0, "max_output_tokens": 512},
+                    contents=user_turn,
+                    config=config,
                 )
             except Exception as exc:  # SDK boundary -> typed failure taxonomy
                 raise classify_sdk_error(exc) from exc
@@ -203,6 +215,8 @@ class MockLLM:
     Never pretends to be real: is_mock=True always, loud warning at
     construction, answer prefixed so it can't pass for model output.
     """
+
+    provider_name = "mock"
 
     def __init__(self) -> None:
         logger.warning(

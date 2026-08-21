@@ -31,6 +31,10 @@ from app.stt.factory import get_stt_provider
 
 logger = logging.getLogger(__name__)
 
+# deterministic refusal used when retrieval found nothing — skipping the LLM
+# here is both faster and more reliable than trusting the model to comply
+NO_CONTEXT_REFUSAL = "I don't know based on the provided context."
+
 
 class PipelineError(RuntimeError):
     """A non-recoverable pipeline stage failure; message is user-presentable."""
@@ -62,12 +66,12 @@ def _merge_trace(source: LatencyTrace, target: LatencyTrace) -> None:
 
 
 def _warn_on_missing_metadata(chunks: list[RetrievedChunk], warnings: list[str]) -> None:
-    """One malformed hit must not sink a response with 4 good ones."""
-    bad = [
-        c.doc_id
-        for c in chunks
-        if not c.doc_id or not getattr(c, "metadata", None)
-    ]
+    """One malformed hit must not sink a response with 4 good ones.
+
+    metadata={} counts as incomplete — a chunk with no provenance can't be
+    cited or audited later.
+    """
+    bad = [c.doc_id for c in chunks if not c.doc_id or not c.metadata]
     for doc_id in bad:
         warnings.append(f"retrieved chunk {doc_id!r} has incomplete metadata")
 
@@ -121,17 +125,26 @@ def run_pipeline(
     # --- stage 3: generation over the strict grounded prompt ---
     llm = llm_provider or get_llm_provider(settings)
     llm_is_mock = type(llm).__name__ == "MockLLM"
+    llm_name = getattr(llm, "provider_name", None) or type(llm).__name__.replace(
+        "LLM", ""
+    ).lower()
     answer = ""
     generation: GenerationResult | None = None
-    try:
+    if not chunks:
+        warnings.append("no context retrieved; skipped LLM call, returning deterministic refusal")
         with stage_timer(GENERATION, trace):
-            generation = llm.generate(query, chunks)
-        answer = generation.answer
-    except LLMError as exc:
-        # degrade, don't die: chunks are still valuable output
-        msg = f"generation failed ({exc}); returning ungrounded-free empty answer"
-        logger.warning(msg)
-        warnings.append(msg)
+            answer = NO_CONTEXT_REFUSAL
+    else:
+        try:
+            with stage_timer(GENERATION, trace):
+                generation = llm.generate(query, chunks)
+            answer = generation.answer
+            llm_is_mock = generation.is_mock
+        except LLMError as exc:
+            # degrade, don't die: chunks are still valuable output
+            msg = f"generation failed ({exc}); returning ungrounded-free empty answer"
+            logger.warning(msg)
+            warnings.append(msg)
 
     assert generation is None or isinstance(generation, GenerationResult)
     return AskResponse(
@@ -142,7 +155,7 @@ def run_pipeline(
         retrieval_ms=trace.retrieval_ms(),
         total_ms=trace.total_ms(),
         warnings=warnings,
-        llm_provider=(generation.provider if generation else llm.__class__.__name__),
+        llm_provider=llm_name,
         llm_model=getattr(llm, "model", getattr(llm, "_model_name", "unknown")),
         llm_is_mock=llm_is_mock,
         stt_is_mock=stt_is_mock,
