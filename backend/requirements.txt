@@ -8,3 +8,5 @@ chromadb
 sentence-transformers
 python-multipart
 tenacity
+huggingface_hub   # direct import in ingestion/download_dataset.py
+pyarrow           # direct import in ingestion/download_dataset.py

@@ -26,7 +26,9 @@ passages:
 The repo itself is split into per-language parquet shards (`train/hintrain.parquet`,
 `validation/hinval.parquet`, ...), ~4GB per train shard and ~460MB per validation
 shard; total ~55GB over 10M train rows. We therefore read exactly one shard and
-cap how many query rows we consume (`MAX_RAW_ROWS`, default 10k).
+cap how many query rows we consume (`MAX_RAW_ROWS`, default 1000 — at ~10
+passages per query row this lands ~10k processed passages, inside the
+5k–20k working-set target).
 
 ### Choices made for this build
 
