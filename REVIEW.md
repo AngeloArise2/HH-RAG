@@ -35,10 +35,10 @@ Two jobs: (1) a checklist to tick off as you complete each `BUILD_PROMPT.md` pha
 - [x] Preview script shows real, visibly different output per strategy
 
 ### Phase 3 — Embedding + vector index
-- [ ] Local embedding model chosen and justified (no network hop in hot path)
-- [ ] 4 Chroma collections built (one per strategy) against real ingested data
-- [ ] Round-trip query test passes (relevant chunk retrieved for a relevant query)
-- [ ] Real indexing time reported
+- [x] Local embedding model chosen and justified (no network hop in hot path)
+- [x] 4 Chroma collections built (one per strategy) against real ingested data
+- [x] Round-trip query test passes (relevant chunk retrieved for a relevant query)
+- [x] Real indexing time reported
 
 ### Phase 4 — Retrieval + timing
 - [ ] `stage_timer` / `LatencyTrace` implemented and used (not scattered `time.time()` calls)

@@ -1,0 +1,104 @@
+"""Round-trip tests: chunk -> build_index -> query must return the right topic.
+
+Uses the real local embedding model (all-MiniLM-L6-v2) — that's the point:
+a fake embedder would make the round-trip test meaningless. First run
+downloads ~80MB of weights; afterwards everything is local.
+"""
+
+import pytest
+
+from app.chunking.base import Chunk
+from app.config import Settings
+from app.retrieval import vector_store
+from app.retrieval.embed import EMBEDDING_DIM, embed_texts
+
+BREAD_TEXTS = [
+    "Sourdough bread needs a lively starter and a long bulk fermentation.",
+    "Bake the loaf in a dutch oven at 240C to get a crackly crust.",
+    "Bread flour with higher protein gives sourdough better structure.",
+]
+PHYSICS_TEXTS = [
+    "Quantum entanglement links particles regardless of distance between them.",
+    "The double slit experiment shows wave particle duality of electrons.",
+    "Superconductors conduct electricity with zero electrical resistance below a critical temperature.",
+]
+
+
+def _chunk(doc_id: str, strategy: str, pos: int, text: str) -> Chunk:
+    return Chunk(
+        text=text,
+        doc_id=doc_id,
+        chunk_id=f"{doc_id}-{strategy}-{pos}",
+        start_offset=0,
+        end_offset=len(text),
+        metadata={"strategy": strategy, "position": pos, "query_id": 1},
+    )
+
+
+@pytest.fixture(scope="module")
+def index_settings(tmp_path_factory) -> Settings:
+    """Build two tiny collections once; all queries in this module hit them."""
+    settings = Settings(vector_store_path=str(tmp_path_factory.mktemp("index")))
+    bread = [_chunk(f"bread{i}", "test_strategy", i, t) for i, t in enumerate(BREAD_TEXTS)]
+    physics = [_chunk(f"phys{i}", "other_strategy", i, t) for i, t in enumerate(PHYSICS_TEXTS)]
+    assert vector_store.build_index(bread, "test_strategy", settings=settings) == 3
+    assert vector_store.build_index(physics, "other_strategy", settings=settings) == 3
+    return settings
+
+
+def test_embed_shapes_and_determinism():
+    vecs = embed_texts(["hello world", "second text"])
+    assert len(vecs) == 2
+    assert all(len(v) == EMBEDDING_DIM for v in vecs)
+    again = embed_texts(["hello world"])
+    assert max(abs(a - b) for a, b in zip(vecs[0], again[0])) < 1e-4
+
+
+def test_roundtrip_query_returns_matching_topic(index_settings):
+    hits = vector_store.query(
+        "how do I bake sourdough bread at home",
+        "test_strategy",
+        top_k=2,
+        settings=index_settings,
+    )
+    assert len(hits) == 2
+    joined = " ".join(h.text.lower() for h in hits)
+    assert "sourdough" in joined or "bread" in joined
+    # best hit should be about baking, not quantum mechanics
+    top = hits[0].text.lower()
+    assert any(kw in top for kw in ("sourdough", "bread", "bake"))
+
+
+def test_collections_are_isolated_per_strategy(index_settings):
+    hits = vector_store.query(
+        "how do I bake sourdough bread at home",
+        "other_strategy",  # physics-only collection
+        top_k=3,
+        settings=index_settings,
+    )
+    assert len(hits) == 3
+    joined = " ".join(h.text.lower() for h in hits).split()
+    # no bread vocabulary should surface from the physics collection's texts
+    assert not {"sourdough", "dutch"} & set(joined)
+
+
+def test_scores_ordered_best_first(index_settings):
+    hits = vector_store.query(
+        "particles and waves in modern physics",
+        "other_strategy",
+        top_k=3,
+        settings=index_settings,
+    )
+    scores = [h.score for h in hits]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_unknown_collection_returns_empty_not_crash(index_settings):
+    assert vector_store.query("anything", "no_such_collection", settings=index_settings) == []
+
+
+def test_build_index_rejects_empty_chunk_list(index_settings):
+    import pytest
+
+    with pytest.raises(ValueError):
+        vector_store.build_index([], "empty_ok", settings=index_settings)

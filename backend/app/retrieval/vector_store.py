@@ -1,0 +1,107 @@
+"""Vector store layer: one Chroma collection per chunking strategy.
+
+Persisted under VECTOR_STORE_PATH from config. Each strategy gets its own
+collection (same corpus, different segmentation), which is what lets Phase 8
+compare retrieval quality/latency per strategy instead of guessing.
+
+Scores: embeddings are L2-normalized and collections use cosine space, so
+`score = 1 - distance` lands in [-1, 1] and reads as cosine similarity.
+"""
+
+from typing import Any
+
+import chromadb
+from pydantic import BaseModel, Field
+
+from app.config import Settings, get_settings
+from app.chunking.base import Chunk
+from app.retrieval.embed import embed_texts
+
+# Chroma caps how many rows a single add/upsert can carry; stay well under it.
+_UPSERT_BATCH = 2000
+
+
+class RetrievedChunk(BaseModel):
+    """One search hit, structured so callers never touch raw chroma dicts."""
+
+    chunk_id: str
+    doc_id: str
+    text: str
+    score: float
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+def _client(settings: Settings | None = None) -> chromadb.api.ClientAPI:
+    settings = settings or get_settings()
+    # settings.vector_store_path is typed str; tolerate Path objects too.
+    return chromadb.PersistentClient(path=str(settings.vector_store_path))
+
+
+def _sanitize_metadata(meta: dict[str, Any]) -> dict[str, Any]:
+    # Chroma accepts only str/int/float/bool metadata values; drop None/other.
+    return {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
+
+
+def build_index(
+    chunks: list[Chunk], strategy_name: str, settings: Settings | None = None
+) -> int:
+    """(Re)build the collection for one strategy; returns chunk count indexed."""
+    if not chunks:
+        raise ValueError(f"no chunks provided for strategy {strategy_name!r}")
+    collection = _client(settings).get_or_create_collection(
+        name=strategy_name,
+        metadata={"hnsw:space": "cosine"},
+    )
+    texts = [c.text for c in chunks]
+    vectors = embed_texts(texts)
+    for i in range(0, len(chunks), _UPSERT_BATCH):
+        sl = slice(i, i + _UPSERT_BATCH)
+        metadatas = [
+            _sanitize_metadata({"doc_id": c.doc_id, **c.metadata}) for c in chunks[sl]
+        ]
+        collection.upsert(
+            ids=[c.chunk_id for c in chunks[sl]],
+            embeddings=vectors[sl],
+            documents=texts[sl],
+            metadatas=metadatas,
+        )
+    return len(chunks)
+
+
+def query(
+    text: str,
+    strategy_name: str,
+    top_k: int = 5,
+    settings: Settings | None = None,
+) -> list[RetrievedChunk]:
+    """Top-k similar chunks from one strategy's collection, best first."""
+    client = _client(settings)
+    try:
+        collection = client.get_collection(name=strategy_name)
+    except Exception:
+        return []  # unknown/not-yet-built collection: no results beats a crash
+
+    if collection.count() == 0:
+        return []
+    response = collection.query(
+        query_embeddings=embed_texts([text]),
+        n_results=min(top_k, collection.count()),
+        include=["documents", "metadatas", "distances"],
+    )
+    hits: list[RetrievedChunk] = []
+    ids = response["ids"][0]
+    docs = response["documents"][0]
+    dists = response["distances"][0]
+    metas = response["metadatas"][0]
+    for chunk_id, text_hit, dist, meta in zip(ids, docs, dists, metas):
+        meta = dict(meta or {})
+        hits.append(
+            RetrievedChunk(
+                chunk_id=chunk_id,
+                doc_id=str(meta.pop("doc_id", "")),
+                text=text_hit,
+                score=float(1.0 - dist),
+                metadata=meta,
+            )
+        )
+    return hits
