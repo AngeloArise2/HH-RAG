@@ -16,11 +16,11 @@ Two jobs: (1) a checklist to tick off as you complete each `BUILD_PROMPT.md` pha
 ## Phase checklist
 
 ### Phase 0 — Scaffold
-- [ ] `uvicorn app.main:app` boots with no errors
-- [ ] `GET /health` returns 200
-- [ ] `pytest backend/tests` passes
-- [ ] Directory structure matches `AGENTS.md`
-- [ ] `.gitignore` excludes `.env`, `backend/data/*`, `__pycache__`
+- [x] `uvicorn app.main:app` boots with no errors
+- [x] `GET /health` returns 200
+- [x] `pytest backend/tests` passes
+- [x] Directory structure matches `AGENTS.md`
+- [x] `.gitignore` excludes `.env`, `backend/data/*`, `__pycache__`
 
 ### Phase 1 — Dataset ingestion
 - [ ] Real subset of `ai4bharat/MSMARCO-XI` downloaded, not simulated
