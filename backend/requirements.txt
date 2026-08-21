@@ -8,5 +8,7 @@ chromadb
 sentence-transformers
 python-multipart
 tenacity
+openai            # Groq speaks the OpenAI SDK protocol (base_url override)
+httpx             # direct HTTP for STT providers + injectable test transports
 huggingface_hub   # direct import in ingestion/download_dataset.py
 pyarrow           # direct import in ingestion/download_dataset.py

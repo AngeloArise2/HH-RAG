@@ -53,10 +53,10 @@ Two jobs: (1) a checklist to tick off as you complete each `BUILD_PROMPT.md` pha
 - [x] Real provider tested if a key is present, real transcript reported *(Sarvam saaras:v3 on backend/data/audio/sample.webm: "Hello. So I just wanted to talk about how's the weather going today." en-IN, ~1.29s incl. network)*
 
 ### Phase 6 — Harness / orchestrator + generation
-- [ ] `/ask` runs STT → retrieval → generation in real sequence
-- [ ] Structured (Pydantic) response, not a loose dict
-- [ ] Per-stage error handling — one stage failing doesn't silently corrupt the whole response
-- [ ] Real end-to-end queries run and real answers/latency reported
+- [x] `/ask` runs STT → retrieval → generation in real sequence *(text input skips STT by design; audio path tested via MockSTTProvider)*
+- [x] Structured (Pydantic) response, not a loose dict *(AskResponse: transcript/answer/chunks/latency_trace/warnings/is_mock flags)*
+- [x] Per-stage error handling — one stage failing doesn't silently corrupt the whole response *(STT/retrieval failure → structured 502; LLM failure → chunks + empty answer + warning; missing metadata → warning; all covered in tests)*
+- [x] Real end-to-end queries run and real answers/latency reported *(Groq openai/gpt-oss-20b, live: incorporation + taxes answered from context; "harry potter" correctly refused with "I don't know based on the provided context"; steady-state retrieval ≈ 24-28ms, generation ≈ 0.8-1.7s, reported separately)*
 
 ### Phase 7 — Guardrails
 - [ ] `input_filter` called before retrieval **inside the orchestrator**, verified in code, not just present as an unused function

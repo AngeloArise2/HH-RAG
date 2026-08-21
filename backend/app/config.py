@@ -24,7 +24,9 @@ class Settings(BaseSettings):
     llm_provider: str = "groq"
     groq_api_key: str = ""
     gemini_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    # Aug 2026: llama-3.3-70b-versatile no longer exists on Groq's free tier;
+    # gpt-oss-20b is the current fast general-instruction model
+    groq_model: str = "openai/gpt-oss-20b"
 
     # --- Vector store ---
     vector_store_path: str = str(_REPO_ROOT / "backend" / "data" / "index")

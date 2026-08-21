@@ -1,8 +1,9 @@
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.benchmarking.latency import LatencyTrace, STT as STT_STAGE, stage_timer
+from app.harness.orchestrator import AskResponse, PipelineError, run_pipeline
 from app.stt.base import STTError, STTProvider
 from app.stt.factory import get_stt_provider
 
@@ -69,3 +70,37 @@ async def transcribe(
         stt_ms=trace.stage_ms.get(STT_STAGE),
         mock_note=mock_note,
     )
+
+
+@app.post("/ask", response_model=AskResponse)
+async def ask(
+    file: UploadFile | None = File(None),
+    query: str | None = Form(None),
+) -> AskResponse:
+    """End-to-end pipeline: audio (transcribed) or raw text -> grounded answer.
+
+    Accepts multipart form with EITHER a `file` (audio) OR a `query` text
+    field — text exists so the pipeline is demoable/testable without a mic.
+    """
+    if (file is None) == (query is None):
+        raise HTTPException(
+            status_code=422,
+            detail="provide exactly one of: audio file, or query text",
+        )
+
+    try:
+        if file is not None:
+            audio_bytes = await file.read()
+            if not audio_bytes:
+                raise HTTPException(status_code=400, detail="empty audio upload")
+            if len(audio_bytes) > MAX_AUDIO_BYTES:
+                raise HTTPException(status_code=413, detail="audio upload too large")
+            return await run_in_threadpool(
+                run_pipeline,
+                audio_bytes=audio_bytes,
+                mime_type=file.content_type or "audio/webm",
+            )
+        return await run_in_threadpool(run_pipeline, text=query)
+    except PipelineError as exc:
+        # stage can't proceed — structured 502, not a stack trace
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
