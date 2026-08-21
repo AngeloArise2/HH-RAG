@@ -9,7 +9,8 @@ Do this **before** you open `BUILD_PROMPT.md`. Budget ~60–90 minutes. Deadline
 | Service | Why you need it | Get it here |
 |---|---|---|
 | **Sarvam AI** *or* **ElevenLabs** | Speech-to-text (pick ONE, per task spec) | sarvam.ai (API key from dashboard) or elevenlabs.io |
-| **Anthropic or OpenAI** | The LLM that generates the final answer | console.anthropic.com or platform.openai.com |
+| **Groq** | The LLM that generates the final answer — **free tier, no card**, and its LPU hardware is unusually fast, which helps rather than hurts your latency numbers | console.groq.com/keys |
+| **Google AI Studio (Gemini)** *(backup)* | Second LLM option if Groq's rate limits get tight during heavy testing/demo day | aistudio.google.com/apikey |
 | **GitHub** | Repo hosting (mandatory submission item) | You likely have this |
 | **Hugging Face** | Dataset access (`ai4bharat/MSMARCO-XI`) | huggingface.co — account not always required for public datasets, but create one anyway in case it's gated |
 | **Render, Railway, or Fly.io** | Backend deployment (need a "live working link") | Pick one now, don't waffle later |
@@ -21,6 +22,8 @@ Do this **before** you open `BUILD_PROMPT.md`. Budget ~60–90 minutes. Deadline
 - **Sarvam** — built for Indian languages, likely cheaper/free-tier friendlier, good if your test queries are Hindi/Indic-language influenced (dataset is MS MARCO-**XI**, i.e. Indic).
 - **ElevenLabs** — excellent English STT, more familiar docs, but not Indic-optimized.
 Given the dataset name (MSMARCO-**XI** = Indic), **Sarvam is the safer default** unless your team already has ElevenLabs credits. Pick one and write it into `PREREQUISITES.md` / `README.md` once decided — don't leave both wired in, it wastes review time.
+
+**LLM for generation: Groq is the default in this kit**, no card required, and it's fast enough that generation latency stops being your bottleneck. Sign up at console.groq.com, grab a key from console.groq.com/keys — takes under a minute. Free tier is rate-limited (~30 requests/min, ~1,000/day, model-dependent) not token-limited, which is plenty for building and demoing but worth knowing before a live judged demo where several people might query it at once — have the Gemini key ready as a fallback if you hit a rate-limit wall right before submission.
 
 ---
 
@@ -65,9 +68,10 @@ SARVAM_API_KEY=
 ELEVENLABS_API_KEY=
 
 # --- LLM for answer generation ---
-LLM_PROVIDER=anthropic         # anthropic | openai
-ANTHROPIC_API_KEY=
-OPENAI_API_KEY=
+LLM_PROVIDER=groq              # groq | gemini
+GROQ_API_KEY=
+GEMINI_API_KEY=
+GROQ_MODEL=llama-3.3-70b-versatile   # good default; swap to llama-3.1-8b-instant if you need more speed/headroom
 
 # --- Vector store (local, no key needed for Chroma) ---
 VECTOR_STORE=chroma
@@ -95,7 +99,7 @@ Fill `.env` with real keys. **Never commit `.env`** — confirm `.gitignore` has
 ## 6. Sanity check before starting Phase 0
 
 - [ ] `opencode` runs in your project folder
-- [ ] `.env` has at least one STT key and one LLM key filled in
+- [ ] `.env` has at least one STT key (Sarvam or ElevenLabs) and a Groq key filled in
 - [ ] You can `curl` huggingface.co (dataset access isn't blocked on your network)
 - [ ] GitHub repo exists and you can push
 - [ ] Deployment account (Render/Railway/Fly) created, no need to deploy yet

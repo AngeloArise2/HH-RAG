@@ -114,6 +114,10 @@ The task specifies a **sub-200ms** target for "chunking + vector DB retrieval + 
 
 This project uses **[Sarvam / ElevenLabs — fill in once decided, see PREREQUISITES.md]**, per the task's "pick one" requirement. Both providers are implemented behind a common interface in `backend/app/stt/` for flexibility during development, but only the configured one (`STT_PROVIDER` in `.env`) is used at runtime.
 
+## LLM provider
+
+Answer generation uses **Groq** (default, free tier, fast LPU inference — see `PREREQUISITES.md`) with **Gemini** as a config-swap fallback if rate limits get tight. Both live behind one interface in `backend/app/generation/llm_client.py`.
+
 ## Deployment
 
 Backend: **[fill in once deployed — Render / Railway / Fly.io]** → live URL: **[fill in]**

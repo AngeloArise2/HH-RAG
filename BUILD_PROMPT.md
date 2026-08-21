@@ -19,7 +19,7 @@ Phases 2–3 and 5 can run in parallel on separate branches if your team is spli
 ```
 Set up the project skeleton per AGENTS.md's directory structure. Specifically:
 
-1. backend/: FastAPI app in backend/app/main.py with a single GET /health endpoint returning {"status": "ok"}. Set up backend/app/config.py loading settings from .env via pydantic-settings (STT_PROVIDER, SARVAM_API_KEY, ELEVENLABS_API_KEY, LLM_PROVIDER, ANTHROPIC_API_KEY, OPENAI_API_KEY, VECTOR_STORE_PATH).
+1. backend/: FastAPI app in backend/app/main.py with a single GET /health endpoint returning {"status": "ok"}. Set up backend/app/config.py loading settings from .env via pydantic-settings (STT_PROVIDER, SARVAM_API_KEY, ELEVENLABS_API_KEY, LLM_PROVIDER, GROQ_API_KEY, GEMINI_API_KEY, GROQ_MODEL, VECTOR_STORE_PATH).
 2. Create backend/requirements.txt with: fastapi, uvicorn, pydantic-settings, pytest, httpx, chromadb, sentence-transformers, python-multipart, tenacity (for retries).
 3. Empty __init__.py files so backend/app and its subpackages (stt, ingestion, chunking, retrieval, generation, guardrails, harness, benchmarking) are importable packages.
 4. A minimal backend/tests/test_health.py using FastAPI's TestClient asserting GET /health returns 200.
@@ -127,7 +127,7 @@ Actually test this against whichever real STT key is present in .env, if one is 
 ```
 Implement:
 
-1. backend/app/generation/llm_client.py — wraps Anthropic/OpenAI (per LLM_PROVIDER config) behind a generate(prompt, context_chunks) -> GenerationResult function, with tenacity retry + timeout like the STT client.
+1. backend/app/generation/llm_client.py — wraps Groq (default) / Gemini (fallback, per LLM_PROVIDER config) behind a generate(prompt, context_chunks) -> GenerationResult function, with tenacity retry + timeout like the STT client. Groq is OpenAI-SDK compatible (base_url https://api.groq.com/openai/v1), so the `openai` python package works directly against it — just point it at Groq's base URL and key. Gemini needs the `google-genai` package instead; keep both behind the same interface so switching is a config change.
 2. backend/app/generation/prompts.py — the prompt template instructing the model to answer ONLY from the provided context chunks and to say it doesn't know if the context doesn't contain the answer. Keep this genuinely strict — this is the first line of defense against ungrounded answers, before Phase 7's guardrails add a second, independent check.
 3. backend/app/harness/orchestrator.py — the actual pipeline: accepts audio (or raw text, for testing without audio), runs STT (skip if text provided) -> retrieval -> generation, in sequence, with each stage timed via stage_timer, wrapped in a structured Pydantic response model (transcript, retrieved_chunks, answer, latency_trace, warnings: list[str]). Catch exceptions per stage and populate `warnings` instead of crashing the whole request when one stage fails gracefully-recoverably (e.g. STT fails -> can't proceed, return a clear error; a single retrieval match missing metadata -> log a warning, continue).
 4. A POST /ask endpoint wiring the orchestrator end to end, accepting either an audio file or a raw text query (for easier testing/demo without a mic).
