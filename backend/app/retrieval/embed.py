@@ -23,7 +23,13 @@ EMBEDDING_DIM = 384
 
 @lru_cache(maxsize=1)
 def _model() -> SentenceTransformer:
-    return SentenceTransformer(EMBEDDING_MODEL)
+    model = SentenceTransformer(EMBEDDING_MODEL)
+    # Guard against EMBEDDING_DIM drifting from the real model if it's swapped
+    loaded = model.get_sentence_embedding_dimension()
+    assert loaded == EMBEDDING_DIM, (
+        f"{EMBEDDING_MODEL} produces {loaded}-dim vectors but EMBEDDING_DIM={EMBEDDING_DIM}"
+    )
+    return model
 
 
 def embed_texts(texts: list[str], batch_size: int = 64) -> list[list[float]]:

@@ -11,6 +11,7 @@ Scores: embeddings are L2-normalized and collections use cosine space, so
 from typing import Any
 
 import chromadb
+from chromadb.errors import NotFoundError
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
@@ -65,7 +66,15 @@ def build_index(
             documents=texts[sl],
             metadatas=metadatas,
         )
-    return len(chunks)
+    # Report what the store actually holds, not what we asked it to hold —
+    # duplicate chunk_ids would silently collapse under upsert.
+    return collection.count()
+
+
+def collection_counts(settings: Settings | None = None) -> dict[str, int]:
+    """Vector count per existing collection — for scripts/monitoring."""
+    client = _client(settings)
+    return {col.name: client.get_collection(col.name).count() for col in client.list_collections()}
 
 
 def query(
@@ -78,8 +87,10 @@ def query(
     client = _client(settings)
     try:
         collection = client.get_collection(name=strategy_name)
-    except Exception:
-        return []  # unknown/not-yet-built collection: no results beats a crash
+    except NotFoundError:
+        return []  # not-yet-built collection: no results beats a crash.
+        # Deliberately NOT swallowing other errors — a corrupted store should
+        # be loud. Refusal semantics get layered on by the phase 6 harness.
 
     if collection.count() == 0:
         return []

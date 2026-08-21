@@ -97,6 +97,25 @@ def test_unknown_collection_returns_empty_not_crash(index_settings):
     assert vector_store.query("anything", "no_such_collection", settings=index_settings) == []
 
 
+def test_build_index_reports_true_store_count(index_settings):
+    # duplicate chunk_ids collapse under upsert; the return value must reflect
+    # what the store holds, not what we handed it
+    dupes = [
+        Chunk(
+            text=f"duplicate id variant {i} about bread.",
+            doc_id="same-id",
+            chunk_id="same-id-dupe_strategy-0",  # identical id on purpose
+            start_offset=0,
+            end_offset=40,
+            metadata={"strategy": "dupe_strategy", "position": i},
+        )
+        for i in range(3)
+    ]
+    reported = vector_store.build_index(dupes, "dupe_strategy", settings=index_settings)
+    assert reported == 1
+    assert vector_store.collection_counts(index_settings)["dupe_strategy"] == 1
+
+
 def test_build_index_rejects_empty_chunk_list(index_settings):
     import pytest
 

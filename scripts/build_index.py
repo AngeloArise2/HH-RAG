@@ -59,9 +59,8 @@ def main() -> None:
           f"in {total_elapsed:.1f}s")
 
     print("\ncollection sizes on disk:")
-    for client_col in vector_store._client(settings).list_collections():
-        count = vector_store._client(settings).get_collection(client_col.name).count()
-        print(f"  {client_col.name}: {count} vectors")
+    for name, count in vector_store.collection_counts(settings).items():
+        print(f"  {name}: {count} vectors")
 
 
 if __name__ == "__main__":
