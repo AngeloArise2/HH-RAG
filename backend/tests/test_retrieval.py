@@ -98,22 +98,31 @@ def test_unknown_collection_returns_empty_not_crash(index_settings):
 
 
 def test_build_index_reports_true_store_count(index_settings):
-    # duplicate chunk_ids collapse under upsert; the return value must reflect
-    # what the store holds, not what we handed it
-    dupes = [
-        Chunk(
-            text=f"duplicate id variant {i} about bread.",
-            doc_id="same-id",
-            chunk_id="same-id-dupe_strategy-0",  # identical id on purpose
+    # Within one upsert batch chroma rejects duplicate ids loudly
+    # (DuplicateIDError). Silent collapse happens ACROSS calls/batches when a
+    # reused chunk_id overwrites an old row -- so the reported count must come
+    # from the store, not from len(chunks).
+    def make(cid: str, text: str) -> Chunk:
+        return Chunk(
+            text=text,
+            doc_id="doc-x",
+            chunk_id=cid,
             start_offset=0,
-            end_offset=40,
-            metadata={"strategy": "dupe_strategy", "position": i},
+            end_offset=len(text),
+            metadata={"strategy": "dupe_strategy", "position": 0},
         )
-        for i in range(3)
+
+    first = [make("dupe-0", "original chunk about sourdough bread.")]
+    assert vector_store.build_index(first, "dupe_strategy", settings=index_settings) == 1
+
+    # same id reused (text changed) + one genuinely new id
+    second = [
+        make("dupe-0", "rewritten chunk about bread."),
+        make("dupe-1", "brand new chunk about physics."),
     ]
-    reported = vector_store.build_index(dupes, "dupe_strategy", settings=index_settings)
-    assert reported == 1
-    assert vector_store.collection_counts(index_settings)["dupe_strategy"] == 1
+    reported = vector_store.build_index(second, "dupe_strategy", settings=index_settings)
+    assert reported == 2  # store holds 2 rows, not 3
+    assert vector_store.collection_counts(index_settings)["dupe_strategy"] == 2
 
 
 def test_build_index_rejects_empty_chunk_list(index_settings):
