@@ -15,35 +15,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-import pyarrow.parquet as pq
-
+from app.benchmarking.queries import load_real_queries
 from app.benchmarking.latency import RETRIEVAL_STAGES
 from app.config import get_settings
 from app.retrieval.retriever import Retriever
 from app.retrieval.vector_store import collection_counts
 
 N_QUERIES = 20
-
-
-def load_real_queries(n: int) -> list[str]:
-    settings = get_settings()
-    filename = f"{settings.dataset_split}/{settings.dataset_language}{'train' if settings.dataset_split == 'train' else 'val'}.parquet"
-    local = Path.home() / ".cache" / "huggingface" / "hub" / (
-        "datasets--ai4bharat--MSMARCO-XI/snapshots"
-    )
-    shards = sorted(local.rglob(filename))
-    if not shards:
-        raise SystemExit("cached dataset shard not found — run scripts/download_and_prepare.py")
-    table = pq.read_table(str(shards[0]), columns=["Eng_Query"])
-    queries = [q for q in table.column("Eng_Query").to_pylist() if q and len(q) > 10]
-    # dedupe preserving order, then take n spread across the corpus, not all from the top
-    seen, unique = set(), []
-    for q in queries:
-        if q not in seen:
-            seen.add(q)
-            unique.append(q)
-    step = max(1, len(unique) // n)
-    return [unique[i] for i in range(0, len(unique), step)][:n]
 
 
 def main() -> None:

@@ -13,6 +13,7 @@ embed_query + vector_search + chunk_assembly. Everything else belongs to the
 full end-to-end number, which is reported honestly without a target.
 """
 
+import math
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -93,3 +94,37 @@ def stage_timer(stage: str, trace: LatencyTrace | None = None) -> Iterator[Optio
     finally:
         if target is not None:
             target.record(stage, (time.perf_counter() - start) * 1000.0)
+
+
+def percentile(values: list[float], pct: float) -> float:
+    """Linear-interpolated percentile over a copy of `values` (pct in [0, 100]).
+
+    Pure-python so the benchmark has no numpy dependency and the math is
+    auditable by reading ten lines. Raises on empty input — silently
+    reporting a percentile of nothing is how fake numbers are born.
+    """
+    if not values:
+        raise ValueError(f"percentile of empty sample (pct={pct})")
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return round(ordered[0], 3)
+    rank = (pct / 100.0) * (len(ordered) - 1)
+    lo, hi = math.floor(rank), math.ceil(rank)
+    if lo == hi:
+        return round(ordered[lo], 3)
+    frac = rank - lo
+    return round(ordered[lo] + (ordered[hi] - ordered[lo]) * frac, 3)
+
+
+def summarize(values: list[float]) -> dict[str, float | int]:
+    """P50/P70/P100 + supporting stats for one latency series (ms)."""
+    if not values:
+        raise ValueError("summarize of empty sample")
+    return {
+        "n": len(values),
+        "min": round(min(values), 3),
+        "p50": percentile(values, 50),
+        "p70": percentile(values, 70),
+        "p100": round(max(values), 3),
+        "mean": round(sum(values) / len(values), 3),
+    }

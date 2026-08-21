@@ -6,6 +6,8 @@ into one blob would hide exactly the number we need to defend the 200ms
 target. Hence two stage_timer blocks, always.
 """
 
+import time
+
 from pydantic import BaseModel
 
 from app.benchmarking.latency import EMBED_QUERY, VECTOR_SEARCH, LatencyTrace, stage_timer
@@ -13,6 +15,9 @@ from app.config import Settings, get_settings
 from app.retrieval import embed as embed_module
 from app.retrieval import vector_store
 from app.retrieval.vector_store import RetrievedChunk
+
+# Neutral probe query for startup warmup — content irrelevant, shape typical.
+WARMUP_QUERY = "what is the process of incorporation of a company"
 
 
 class RetrievalResult(BaseModel):
@@ -51,3 +56,17 @@ class Retriever:
         return RetrievalResult(
             query=query_text, strategy=self.strategy_name, chunks=hits, trace=trace
         )
+
+
+def warm_retrieval(settings: Settings | None = None) -> float:
+    """Pay one-time costs (MiniLM load from disk, first ANN touch) up front.
+
+    Measured live in phase 4/6: the FIRST query after process start spends
+    ~9-11s inside embed_query on model load; every later query is ~7-10ms.
+    Called at FastAPI startup and before benchmark timing so a judge's first
+    demo query isn't the cold one. Idempotent — repeat calls cost ~10ms.
+    Returns elapsed milliseconds.
+    """
+    start = time.perf_counter()
+    Retriever(settings=settings or get_settings(), top_k=1).retrieve(WARMUP_QUERY)
+    return (time.perf_counter() - start) * 1000.0

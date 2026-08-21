@@ -66,10 +66,10 @@ Two jobs: (1) a checklist to tick off as you complete each `BUILD_PROMPT.md` pha
 - [x] No false refusals on the in-scope test cases *(0/3 live and offline; live run also verified real LLM guards: gpt-oss needed reasoning_effort=low + larger token budget or guard calls came back empty)*
 
 ### Phase 8 — Latency benchmarking
-- [ ] `docs/latency_report.md` has real P50/P70/P100 from a real run (≥30-50 queries)
-- [ ] Retrieval-only and full end-to-end reported **separately**, both honestly
-- [ ] Retrieval-only number checked against the 200ms target explicitly
-- [ ] No target claimed for full end-to-end that isn't actually met
+- [x] `docs/latency_report.md` has real P50/P70/P100 from a real run (≥30-50 queries) *(40 real `Eng_Query` dataset questions + 5 voice runs through the live orchestrator; raw rows kept in backend/data/benchmark_results.json)*
+- [x] Retrieval-only and full end-to-end reported **separately**, both honestly *(retrieval-only P50 31.2 / P70 32.5 / P100 49.3ms; text e2e P50 1713ms / P100 2148ms — no target attached to e2e anywhere; explicit Requirement-3 interpretation section explains why mandated external STT makes literal full-pipeline <200ms unsatisfiable)*
+- [x] Retrieval-only number checked against the 200ms target explicitly *(verdict line: MEETS target, ~4× headroom even at P100)*
+- [x] No target claimed for full end-to-end that isn't actually met *(e2e tables carry an explicit "NO 200ms claim" header; patterns-considered section documents adopted vs rejected optimizations with corrected math)*
 
 ### Phase 9 — Frontend + deployment
 - [ ] Voice recording UI works and calls `/ask`

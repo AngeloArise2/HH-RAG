@@ -35,6 +35,14 @@ logger = logging.getLogger(__name__)
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 _MAX_ATTEMPTS = 3
 
+# Ceiling for ANSWER generation (guards use their own smaller budgets).
+# Not a latency knob — decode stops at EOS, so unused headroom is free — but
+# gpt-oss reasoning models burn hidden thinking tokens from this same budget
+# before the visible answer starts (phase 7: max_tokens=16 returned EMPTY
+# content). 384 covers low-effort reasoning + a full 1-3 sentence answer with
+# margin; observed answers are ~60-120 tokens.
+GENERATION_MAX_TOKENS = 384
+
 
 class GenerationResult(BaseModel):
     """One completion outcome. is_mock=True MUST surface in any response."""
@@ -153,7 +161,7 @@ class GroqLLM:
                 response = self._client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    **self._completion_kwargs(512),
+                    **self._completion_kwargs(GENERATION_MAX_TOKENS),
                 )
             except Exception as exc:  # SDK boundary -> typed failure taxonomy
                 raise classify_sdk_error(exc) from exc
@@ -222,7 +230,7 @@ class GeminiLLM:
         # instead of flattening it into the user turn
         config = {
             "temperature": 0.0,
-            "max_output_tokens": 512,
+            "max_output_tokens": GENERATION_MAX_TOKENS,
             "system_instruction": messages[0]["content"],
         }
         user_turn = messages[1]["content"]

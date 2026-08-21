@@ -1,13 +1,32 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.benchmarking.latency import LatencyTrace, STT as STT_STAGE, stage_timer
 from app.harness.orchestrator import AskResponse, PipelineError, run_pipeline
+from app.retrieval.retriever import warm_retrieval
 from app.stt.base import STTError, STTProvider
 from app.stt.factory import get_stt_provider
 
-app = FastAPI(title="voice-rag", version="0.1.0")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Warm the retrieval path at startup: the first embed otherwise costs
+    ~9-11s (MiniLM load), which must never land on the first real query."""
+    try:
+        warm_ms = await run_in_threadpool(warm_retrieval)
+        logger.info("retrieval warmed up in %.0fms — ready", warm_ms)
+    except Exception as exc:  # warmup must never block startup
+        logger.warning("startup retrieval warmup skipped: %s", exc)
+    yield
+
+
+app = FastAPI(title="voice-rag", version="0.1.0", lifespan=lifespan)
 
 # providers' sync STT endpoints accept ~30s clips; reject anything absurd
 # before it burns a network call (Sarvam 400s on oversized bodies anyway)

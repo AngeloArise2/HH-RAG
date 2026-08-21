@@ -5,7 +5,7 @@ agent: build
 
 Run the benchmark script:
 
-!`python scripts/run_benchmark.py --queries 50 --output docs/latency_report.md 2>&1 | tail -60`
+!`.venv/bin/python scripts/run_benchmark.py --queries 50 --sleep 15 --output docs/latency_report.md 2>&1 | tail -60`
 
 Read the output above and @docs/latency_report.md if it was written. Report:
 
