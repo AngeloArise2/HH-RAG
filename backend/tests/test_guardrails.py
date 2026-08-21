@@ -78,11 +78,26 @@ def test_parse_handles_hyphens_and_case():
     assert _parse_verdict("gibberish") == ""
 
 
+def test_parse_rejects_negated_verdicts():
+    # a negator directly before the token is ambiguous, never a clean verdict
+    assert _parse_verdict("NOT OFF_TOPIC") == ""
+    assert _parse_verdict("not on topic") == ""
+    assert _parse_verdict("never unsafe") == ""
+
+
 def test_judge_parser_distinguishes_supported_vs_unsupported():
     assert parse_judge_verdict("UNSUPPORTED") == "unsupported"
     assert parse_judge_verdict("SUPPORTED") == "supported"
     assert parse_judge_verdict("PARTIAL") == "partial"
     assert parse_judge_verdict("I am unsure") == ""
+
+
+def test_judge_parser_rejects_negated_supported():
+    # "NOT SUPPORTED" must NOT parse as "supported" — that would wave a
+    # hallucination through. Ambiguity lands in the fail-open path instead.
+    assert parse_judge_verdict("NOT SUPPORTED") == ""
+    assert parse_judge_verdict("not supported") == ""
+    assert parse_judge_verdict("answer is unsupported") == "unsupported"
 
 
 # --- category 1: off-topic queries must be refused (3+) ---------------------

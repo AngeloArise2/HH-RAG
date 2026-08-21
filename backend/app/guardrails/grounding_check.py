@@ -19,7 +19,10 @@ from pydantic import BaseModel
 
 from app.generation.llm_client import LLMError
 from app.generation.prompts import build_context_block
-from app.guardrails.input_filter import GuardVerdict  # noqa: F401 (shared type)
+from app.guardrails.input_filter import (  # noqa: F401 (GuardVerdict is a shared type)
+    GuardVerdict,
+    match_is_negated,
+)
 from app.guardrails.refusal import UNGROUNDED_REFUSAL
 
 logger = logging.getLogger(__name__)
@@ -50,8 +53,15 @@ _JUDGE_PATTERN = re.compile(r"\b(unsupported|partial|supported)\b")
 
 
 def parse_judge_verdict(text: str) -> str:
-    match = _JUDGE_PATTERN.search(text.lower())
-    return match.group(0) if match else ""
+    lowered = text.lower().strip()
+    # exact single-token responses need no interpretation
+    if lowered in {"supported", "partial", "unsupported"}:
+        return lowered
+    match = _JUDGE_PATTERN.search(lowered)
+    if not match or match_is_negated(lowered, match.start()):
+        # unparseable / negated ("NOT SUPPORTED") -> "" -> caller fails open
+        return ""
+    return match.group(0)
 
 
 def _judge_user_text(answer: str, chunks) -> str:

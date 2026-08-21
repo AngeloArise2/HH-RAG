@@ -1,7 +1,8 @@
 """Input-side guardrail: off-topic + unsafe detection BEFORE retrieval.
 
-One cheap strict-schema LLM call (temp 0, ~16 output tokens) classifies the
-transcribed query. Runs inside the orchestrator's request path; tripping it
+One cheap strict-schema LLM call (temp 0, capped at 128 output tokens —
+headroom so reasoning models don't burn the whole budget thinking) classifies
+the transcribed query. Runs inside the orchestrator's request path; tripping it
 short-circuits the pipeline before any embedding or vector search happens.
 
 Scope definition is deliberately GENEROUS: anything plausibly answerable from
@@ -19,7 +20,6 @@ import re
 from pydantic import BaseModel
 
 from app.generation.llm_client import LLMError
-from app.guardrails.refusal import refusal_for
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +49,27 @@ Respond with ONLY one word: ON_TOPIC, OFF_TOPIC, or UNSAFE."""
 # tolerant of "ON_TOPIC", "off-topic", "Off Topic" spellings
 _VERDICT_PATTERN = re.compile(r"\b(on[\s_-]?topic|off[\s_-]?topic|unsafe)\b")
 
+# a verdict token directly preceded by a negator ("NOT OFF_TOPIC") is
+# ambiguous, not a clean classification — reject it and let the caller's
+# fail-open path handle it. Matters most in the judge (grounding_check):
+# "NOT SUPPORTED" must never parse as "supported".
+_NEGATION_RE = re.compile(r"\b(?:not|no|never|neither|nor|isn't|aren't|wasn't|weren't)\s*$")
+
+
+def match_is_negated(text: str, start: int) -> bool:
+    """True when the token at `start` is directly preceded by a negator."""
+    return bool(_NEGATION_RE.search(text[:start]))
+
 
 def _parse_verdict(text: str) -> str:
     """Extract the verdict token from a possibly chatty response."""
-    match = _VERDICT_PATTERN.search(text.lower())
-    return re.sub(r"[\s\-]+", "_", match.group(0)) if match else ""
+    lowered = text.lower().strip()
+    if lowered in {"on_topic", "off_topic", "unsafe"}:
+        return lowered
+    match = _VERDICT_PATTERN.search(lowered)
+    if not match or match_is_negated(lowered, match.start()):
+        return ""
+    return re.sub(r"[\s\-]+", "_", match.group(0))
 
 
 def classify_input(query: str, llm) -> GuardVerdict:
@@ -76,7 +92,3 @@ def classify_input(query: str, llm) -> GuardVerdict:
 
 def is_refusal(verdict: GuardVerdict) -> bool:
     return verdict.verdict in {"off_topic", "unsafe"}
-
-
-def refusal_reason(verdict: GuardVerdict) -> str:
-    return refusal_for(verdict.verdict)
