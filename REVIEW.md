@@ -47,10 +47,10 @@ Two jobs: (1) a checklist to tick off as you complete each `BUILD_PROMPT.md` pha
 - [x] Honest statement if retrieval isn't yet comfortably under 200ms *(is comfortably under: P50 ≈ 22ms over 20 real queries — full P50/P70/P100 report still due in Phase 8)*
 
 ### Phase 5 — STT
-- [ ] Both Sarvam and ElevenLabs implemented behind one interface (even though only one is "active")
-- [ ] Retry-with-backoff and timeout present in code
-- [ ] Mock fallback works with no key, clearly flagged as mock (not silently passed off as real)
-- [ ] Real provider tested if a key is present, real transcript reported
+- [x] Both Sarvam and ElevenLabs implemented behind one interface (even though only one is "active") *(Sarvam live; ElevenLabs real implementation, no key — mock-fallback tested)*
+- [x] Retry-with-backoff and timeout present in code *(3 attempts, 0.5s→1s backoff, 10s timeout; 429/5xx/timeouts retried, 401/413 fail fast — all covered by httpx.MockTransport tests)*
+- [x] Mock fallback works with no key, clearly flagged as mock (not silently passed off as real) *(is_mock flag + mock_note on /transcribe + warning log)*
+- [x] Real provider tested if a key is present, real transcript reported *(Sarvam saaras:v3 on backend/data/audio/sample.webm: "Hello. So I just wanted to talk about how's the weather going today." en-IN, ~1.29s incl. network)*
 
 ### Phase 6 — Harness / orchestrator + generation
 - [ ] `/ask` runs STT → retrieval → generation in real sequence
