@@ -83,7 +83,21 @@ def query(
     top_k: int = 5,
     settings: Settings | None = None,
 ) -> list[RetrievedChunk]:
-    """Top-k similar chunks from one strategy's collection, best first."""
+    """Convenience one-shot: embed + search in a single call.
+
+    Prefer Retriever (retrieval/retriever.py) on the request path — it times
+    embed_query and vector_search as separate stages.
+    """
+    return search_vectors(embed_texts([text])[0], strategy_name, top_k, settings=settings)
+
+
+def search_vectors(
+    query_vector: list[float],
+    strategy_name: str,
+    top_k: int = 5,
+    settings: Settings | None = None,
+) -> list[RetrievedChunk]:
+    """Top-k similar chunks for an ALREADY-EMBEDDED query vector, best first."""
     client = _client(settings)
     try:
         collection = client.get_collection(name=strategy_name)
@@ -95,7 +109,7 @@ def query(
     if collection.count() == 0:
         return []
     response = collection.query(
-        query_embeddings=embed_texts([text]),
+        query_embeddings=[query_vector],
         n_results=min(top_k, collection.count()),
         include=["documents", "metadatas", "distances"],
     )

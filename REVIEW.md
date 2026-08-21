@@ -41,10 +41,10 @@ Two jobs: (1) a checklist to tick off as you complete each `BUILD_PROMPT.md` pha
 - [x] Real indexing time reported
 
 ### Phase 4 — Retrieval + timing
-- [ ] `stage_timer` / `LatencyTrace` implemented and used (not scattered `time.time()` calls)
-- [ ] `embed_query` and `vector_search` timed **separately**
-- [ ] Real millisecond numbers reported from a real run
-- [ ] Honest statement if retrieval isn't yet comfortably under 200ms
+- [x] `stage_timer` / `LatencyTrace` implemented and used (not scattered `time.time()` calls)
+- [x] `embed_query` and `vector_search` timed **separately**
+- [x] Real millisecond numbers reported from a real run
+- [x] Honest statement if retrieval isn't yet comfortably under 200ms *(is comfortably under: P50 ≈ 22ms over 20 real queries — full P50/P70/P100 report still due in Phase 8)*
 
 ### Phase 5 — STT
 - [ ] Both Sarvam and ElevenLabs implemented behind one interface (even though only one is "active")

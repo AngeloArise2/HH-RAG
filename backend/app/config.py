@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     max_raw_rows: int = 1000  # ~10 passages/row in MSMARCO-XI, so ~10k processed passages
     min_passage_chars: int = 30
 
+    # --- Retrieval ---
+    # Active chunking strategy for query-time retrieval. Swappable via config;
+    # per-strategy comparison happens in the phase 8 benchmark.
+    default_chunk_strategy: str = "metadata_aware"
+
     raw_data_dir: Path = _REPO_ROOT / "backend" / "data" / "raw"
     processed_data_dir: Path = _REPO_ROOT / "backend" / "data" / "processed"
 

@@ -25,7 +25,7 @@ EMBEDDING_DIM = 384
 def _model() -> SentenceTransformer:
     model = SentenceTransformer(EMBEDDING_MODEL)
     # Guard against EMBEDDING_DIM drifting from the real model if it's swapped
-    loaded = model.get_sentence_embedding_dimension()
+    loaded = model.get_embedding_dimension()
     assert loaded == EMBEDDING_DIM, (
         f"{EMBEDDING_MODEL} produces {loaded}-dim vectors but EMBEDDING_DIM={EMBEDDING_DIM}"
     )
