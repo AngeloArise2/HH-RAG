@@ -9,6 +9,7 @@ Scores: embeddings are L2-normalized and collections use cosine space, so
 """
 
 from typing import Any
+import logging
 
 import chromadb
 from chromadb.errors import NotFoundError
@@ -17,6 +18,8 @@ from pydantic import BaseModel, Field
 from app.config import Settings, get_settings
 from app.chunking.base import Chunk
 from app.retrieval.embed import embed_texts
+
+logger = logging.getLogger(__name__)
 
 # Chroma caps how many rows a single add/upsert can carry; stay well under it.
 _UPSERT_BATCH = 2000
@@ -102,9 +105,17 @@ def search_vectors(
     try:
         collection = client.get_collection(name=strategy_name)
     except NotFoundError:
-        return []  # not-yet-built collection: no results beats a crash.
-        # Deliberately NOT swallowing other errors — a corrupted store should
-        # be loud. Refusal semantics get layered on by the phase 6 harness.
+        # not-yet-built collection: no results beats a crash. Logged loudly
+        # because a silently-empty store is indistinguishable from a working
+        # one downstream — this exact silence once masked a cwd-dependent
+        # path misconfiguration (every query returned zero context).
+        logger.warning(
+            "collection %r not found in %s — returning 0 hits "
+            "(index not built or store path misconfigured)",
+            strategy_name,
+            settings.vector_store_path if settings else get_settings().vector_store_path,
+        )
+        return []
 
     if collection.count() == 0:
         return []
