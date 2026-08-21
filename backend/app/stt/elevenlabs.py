@@ -43,5 +43,8 @@ class ElevenLabsSTT:
             text=payload.get("text", ""),
             provider="elevenlabs",
             language=payload.get("language_code"),
+            # provider-reported probability; scribe gives no per-token
+            # transcript confidence, so this is the closest honest signal
+            confidence=payload.get("language_probability"),
             audio_duration_secs=payload.get("audio_duration_secs"),
         )

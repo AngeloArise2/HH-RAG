@@ -142,7 +142,20 @@ def test_elevenlabs_parses_scribe_response():
     assert isinstance(result, TranscriptResult)
     assert result.text == "hello from scribe"
     assert result.language == "eng"
+    assert result.confidence == 0.98
     assert result.audio_duration_secs == 1.5
+
+
+def test_malformed_json_body_raises_stterror_not_crash():
+    def handler(request):
+        return httpx.Response(200, text="<html>gateway garbage</html>")
+
+    provider = SarvamSTT(
+        api_key="k",
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(STTError, match="non-JSON"):
+        provider.transcribe(PNG_BYTES, "audio/webm")
 
 
 def test_post_multipart_requires_nonempty_audio():
@@ -197,6 +210,15 @@ def test_transcribe_endpoint_rejects_empty_upload(mock_client):
         files={"file": ("empty.webm", b"", "audio/webm")},
     )
     assert response.status_code == 400
+
+
+def test_transcribe_endpoint_rejects_oversized_upload(mock_client):
+    big = b"x" * (26 * 1024 * 1024)
+    response = mock_client.post(
+        "/transcribe",
+        files={"file": ("big.webm", big, "audio/webm")},
+    )
+    assert response.status_code == 413
 
 
 def test_transcribe_endpoint_maps_stt_failure_to_502():

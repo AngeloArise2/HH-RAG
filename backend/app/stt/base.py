@@ -98,7 +98,13 @@ def post_multipart(
                 raise STTError(
                     f"STT API returned {response.status_code}: {response.text[:200]}"
                 )
-            return response.json()
+            try:
+                return response.json()
+            except ValueError as exc:
+                # a 200 with a non-JSON body is still a failed transcription
+                raise STTError(
+                    f"STT API returned non-JSON body: {response.text[:200]}"
+                ) from exc
 
     try:
         for attempt in Retrying(

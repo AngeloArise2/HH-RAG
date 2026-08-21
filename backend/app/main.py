@@ -8,6 +8,10 @@ from app.stt.factory import get_stt_provider
 
 app = FastAPI(title="voice-rag", version="0.1.0")
 
+# providers' sync STT endpoints accept ~30s clips; reject anything absurd
+# before it burns a network call (Sarvam 400s on oversized bodies anyway)
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
+
 
 def stt_provider_dependency() -> STTProvider:
     """Resolved per request so config changes / test overrides take effect."""
@@ -36,6 +40,8 @@ async def transcribe(
     audio_bytes = await file.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="empty audio upload")
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="audio upload too large")
 
     mime_type = file.content_type or "audio/webm"
     trace = LatencyTrace()
