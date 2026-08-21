@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     dataset_name: str = "ai4bharat/MSMARCO-XI"
     dataset_language: str = "hin"
     dataset_split: str = "validation"
-    max_raw_rows: int = 10000
+    max_raw_rows: int = 1000  # ~10 passages/row in MSMARCO-XI, so ~10k processed passages
     min_passage_chars: int = 30
 
     raw_data_dir: Path = _REPO_ROOT / "backend" / "data" / "raw"
