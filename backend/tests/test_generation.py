@@ -308,3 +308,82 @@ def test_duplicate_backups_deduped_and_empties_dropped():
         backup_models=["openai/gpt-oss-20b", "", "qwen/qwen3.6-27b"],
     )
     assert provider._model_chain == ["openai/gpt-oss-20b", "qwen/qwen3.6-27b"]
+
+
+def test_gpt_oss_backup_gets_thinking_headroom_primary_does_not():
+    """Backups get thinking headroom (max(4x, 384)); the primary keeps
+    caller-supplied budgets exactly. gpt-oss burns hidden thinking from the
+    same budget (120b truncated at 16); qwen thinks visibly (~263 tok)."""
+    bodies = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        bodies.append((body["model"], body["max_tokens"]))
+        if body["model"] == "openai/gpt-oss-20b":
+            return rate_limited_response()   # primary: force chain forward
+        if body["model"] == "openai/gpt-oss-120b":
+            return rate_limited_response()   # first backup: also fail, reach qwen
+        return httpx.Response(200, json=ok_completion("ON_TOPIC"))
+
+    provider, calls = groq_with_chain(handler, ["openai/gpt-oss-120b", "qwen/qwen3.6-27b"])
+    assert provider.complete_raw("classify this query", "hello") == "ON_TOPIC"
+    by_model = dict(bodies)
+    assert by_model["openai/gpt-oss-20b"] == 16       # primary: untouched
+    assert by_model["openai/gpt-oss-120b"] == 384     # backup headroom floor
+    assert by_model["qwen/qwen3.6-27b"] == 384        # backup headroom floor
+    assert calls["count"] == 7
+
+
+def test_reasoning_format_hidden_sent_only_to_non_gpt_oss_models():
+    """qwen-family backups need reasoning_format=hidden (visible <think>
+    blocks corrupt verdict parsing); gpt-oss keeps its reasoning_effort."""
+    bodies = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        bodies.append((body["model"], body.get("reasoning_format")))
+        if body["model"] == "openai/gpt-oss-20b":
+            return rate_limited_response()
+        if body["model"] == "openai/gpt-oss-120b":
+            return rate_limited_response()
+        return httpx.Response(200, json=ok_completion("ON_TOPIC"))
+
+    provider, _ = groq_with_chain(handler, ["openai/gpt-oss-120b", "qwen/qwen3.6-27b"])
+    assert provider.complete_raw("classify", "hello") == "ON_TOPIC"
+    fmts = dict(bodies)
+    assert fmts["openai/gpt-oss-20b"] is None
+    assert fmts["openai/gpt-oss-120b"] is None
+    assert fmts["qwen/qwen3.6-27b"] == "hidden"
+
+
+def test_think_blocks_stripped_verdict_survives():
+    """qwen3.6-27b wraps output in <think>...</think> — observed live. A
+    guard receiving raw content would parse an essay instead of a verdict."""
+    def handler(req):
+        return httpx.Response(200, json=ok_completion(
+            "<think>\nLet me classify this query...\n</think>\n\nON_TOPIC"
+        ))
+
+    provider = GroqLLM(
+        api_key="k", model="not-a-real-model",
+        backup_models=["qwen/qwen3.6-27b"],
+        http_transport=httpx.MockTransport(handler),
+    )
+    assert provider.complete_raw("classify", "hello") == "ON_TOPIC"
+
+
+def test_unclosed_think_block_counts_as_empty_and_advances_chain():
+    """Model spent its whole budget thinking and never answered: '' after
+    strip -> permanent empty-completion error -> next model serves."""
+
+    def handler(req):
+        if json.loads(req.content)["model"] == "not-a-real-model":
+            return httpx.Response(200, json=ok_completion("<think>still reasoning"))
+        return httpx.Response(200, json=ok_completion("OFF_TOPIC"))
+
+    provider = GroqLLM(
+        api_key="k", model="not-a-real-model",
+        backup_models=["qwen/qwen3.6-27b"],
+        http_transport=httpx.MockTransport(handler),
+    )
+    assert provider.complete_raw("classify", "hello") == "OFF_TOPIC"

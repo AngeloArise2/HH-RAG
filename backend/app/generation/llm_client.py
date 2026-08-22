@@ -93,6 +93,20 @@ def classify_sdk_error(exc: Exception) -> Exception:
     return LLMError(f"LLM API call failed: {str(exc)[:200]}")
 
 
+def _strip_think(text: str) -> str:
+    """Remove <think>...</think> reasoning blocks some models emit inline in
+    their content (observed live: qwen3.6-27b on Groq wraps verdicts AND
+    answers in them — a guard expecting 'ON_TOPIC' would otherwise receive
+    an essay). Returns everything after the LAST closing tag. An UNCLOSED
+    <think> means the model spent its entire budget thinking and never
+    answered: return '' so the completion counts as empty and the fallback
+    chain moves to the next model instead of feeding garbage to guards.
+    """
+    if "</think>" not in text:
+        return "" if "<think>" in text else text
+    return text.rsplit("</think>", 1)[1].strip()
+
+
 def _chat_with_retry(send_once: Callable[[], str]) -> str:
     """Run one chat-completion call under the shared retry/backoff policy.
 
@@ -171,21 +185,51 @@ class GroqLLM:
 
     def _chat_once(self, messages: list[dict], model: str, max_tokens: int) -> str:
         """One chat completion against ONE model, under the shared retry policy."""
+        # gpt-oss models burn hidden thinking tokens from the SAME max_tokens
+        # budget (see GENERATION_MAX_TOKENS note). The primary's budgets are
+        # sized from measured behavior, but an untested gpt-oss BACKUP can
+        # return empty/truncated completions at guard-sized budgets — observed
+        # live: gpt-oss-120b answered 'A corporation' (truncated mid-sentence)
+        # at max_tokens=16 even with reasoning_effort=low. Give every chain
+        # entry OTHER than the primary 4x headroom; decode still stops at EOS,
+        # so the extra cap costs nothing when thinking is short.
+        budget = max_tokens
+        if model != self.model:
+            # Every BACKUP entry gets thinking headroom: gpt-oss models burn
+            # hidden thinking tokens from this same budget (120b truncated a
+            # verdict at 16); qwen-family thinks visibly and measured ~263
+            # completion tokens for a one-word classify. 4x caller budget,
+            # floored at GENERATION_MAX_TOKENS (the project's measured
+            # thinking-inclusive size); decode stops at EOS regardless.
+            budget = max(max_tokens * 4, GENERATION_MAX_TOKENS)
+
+        # Non-gpt-oss reasoning models (observed: qwen3.6-27b) emit visible
+        # <think> blocks that measured ~263 completion tokens for a one-word
+        # guard verdict — raw tags would corrupt verdict parsing. Groq's
+        # documented `reasoning_format=hidden` keeps the content clean
+        # (verified live); _strip_think below remains as a safety net.
+        # gpt-oss entries keep their reasoning_effort path instead.
+        extra_body = (
+            {"reasoning_format": "hidden"} if "gpt-oss" not in model.lower() else None
+        )
 
         def send_once() -> str:
             try:
                 response = self._client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    **self._completion_kwargs(max_tokens, model),
+                    **self._completion_kwargs(budget, model),
+                    **({"extra_body": extra_body} if extra_body else {}),
                 )
             except Exception as exc:  # SDK boundary -> typed failure taxonomy
                 raise classify_sdk_error(exc) from exc
             choice = response.choices[0] if response.choices else None
             content = (choice.message.content or "").strip() if choice else ""
+            content = _strip_think(content)
             if not content:
-                # empty at temperature=0 is deterministic (length cap/filter) —
-                # retrying cannot change it, so fail permanently
+                # empty at temperature=0 is deterministic (length cap/filter,
+                # or a think-block that consumed the whole budget) — retrying
+                # cannot change it, so fail permanently and let the chain move
                 raise LLMError("model returned an empty completion")
             return content
 
