@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 import bench_remote  # noqa: E402
 
@@ -37,7 +37,9 @@ def test_report_percentiles_over_collected_rows():
     ]
     table = bench_remote.report({"rows": rows})
     assert table["retrieval_ms"]["n"] == 4
-    assert table["retrieval_ms"]["p50"] == pytest.approx(15.0)  # sorted 14,15,16,18
+    # percentile() is linear-interpolated (numpy convention): sorted 14,15,16,18
+    # -> p50 sits halfway between 15 and 16.
+    assert table["retrieval_ms"]["p50"] == pytest.approx(15.5)
     assert table["embed_query"]["p100"] == pytest.approx(8.0)
 
 
