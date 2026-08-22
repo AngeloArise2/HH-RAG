@@ -39,7 +39,17 @@ def _session() -> tuple[ort.InferenceSession, object]:
     from huggingface_hub import hf_hub_download
 
     onnx_path = hf_hub_download(EMBEDDING_MODEL, ONNX_FILE)
-    session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    # Pin thread pools to 1: ORT auto-sizes from the HOST core count, which
+    # wildly overshoots a throttled container (Render free = 0.1 shared CPU)
+    # — pool spin-up plus cross-thread contention inflated embed_query
+    # several-fold there. Single-threaded is also deterministic and plenty
+    # for one 22M-param forward pass.
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = 1
+    opts.inter_op_num_threads = 1
+    session = ort.InferenceSession(
+        str(onnx_path), sess_options=opts, providers=["CPUExecutionProvider"]
+    )
     tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL)
     return session, tokenizer
 

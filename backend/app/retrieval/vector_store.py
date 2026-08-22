@@ -41,6 +41,25 @@ def _client(settings: Settings | None = None) -> chromadb.api.ClientAPI:
     return chromadb.PersistentClient(path=str(settings.vector_store_path))
 
 
+# Collection handles cached per (store_path, name). Fetching one costs sqlite
+# reads + segment validation on every call; measured live on throttled CPU
+# (Render free), that per-request machinery dominated vector_search (~700ms
+# vs ~23ms locally). The client's heavy internals are shared by chromadb,
+# but the handle itself was being rebuilt per request — same class of bug as
+# the embedder singleton. Keyed by path so tests with tmp stores stay isolated.
+_collections: dict[tuple[str, str], Any] = {}
+
+
+def _collection(name: str, settings: Settings | None = None) -> Any:
+    settings = settings or get_settings()
+    key = (str(settings.vector_store_path), name)
+    handle = _collections.get(key)
+    if handle is None:
+        handle = _client(settings).get_collection(name=name)
+        _collections[key] = handle
+    return handle
+
+
 def _sanitize_metadata(meta: dict[str, Any]) -> dict[str, Any]:
     # Chroma accepts only str/int/float/bool metadata values; drop None/other.
     return {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
@@ -101,9 +120,9 @@ def search_vectors(
     settings: Settings | None = None,
 ) -> list[RetrievedChunk]:
     """Top-k similar chunks for an ALREADY-EMBEDDED query vector, best first."""
-    client = _client(settings)
+    settings = settings or get_settings()
     try:
-        collection = client.get_collection(name=strategy_name)
+        collection = _collection(strategy_name, settings)
     except NotFoundError:
         # not-yet-built collection: no results beats a crash. Logged loudly
         # because a silently-empty store is indistinguishable from a working
@@ -113,15 +132,16 @@ def search_vectors(
             "collection %r not found in %s — returning 0 hits "
             "(index not built or store path misconfigured)",
             strategy_name,
-            settings.vector_store_path if settings else get_settings().vector_store_path,
+            settings.vector_store_path,
         )
         return []
 
-    if collection.count() == 0:
+    total = collection.count()
+    if total == 0:
         return []
     response = collection.query(
         query_embeddings=[query_vector],
-        n_results=min(top_k, collection.count()),
+        n_results=min(top_k, total),
         include=["documents", "metadatas", "distances"],
     )
     hits: list[RetrievedChunk] = []

@@ -130,3 +130,39 @@ def test_build_index_rejects_empty_chunk_list(index_settings):
 
     with pytest.raises(ValueError):
         vector_store.build_index([], "empty_ok", settings=index_settings)
+
+
+def test_collection_handle_reused_across_queries(index_settings, monkeypatch):
+    """The hot path must not reopen the client/collection per request —
+    per-request fetches cost sqlite reads + segment validation every call
+    (measured ~700ms vector_search on throttled CPU vs ~23ms locally)."""
+    calls = {"n": 0}
+    real_client = vector_store._client
+
+    def counting_client(settings=None):
+        calls["n"] += 1
+        return real_client(settings)
+
+    monkeypatch.setattr(vector_store, "_client", counting_client)
+    # cold start: earlier tests in this module already warmed the cache
+    vector_store._collections.pop((str(index_settings.vector_store_path), "test_strategy"), None)
+    vec = embed_texts(["how do I bake sourdough bread at home"])[0]
+    vector_store.search_vectors(vec, "test_strategy", top_k=2, settings=index_settings)
+    vector_store.search_vectors(vec, "test_strategy", top_k=2, settings=index_settings)
+    assert calls["n"] == 1  # second query reused the cached handle
+
+
+def test_cached_handle_stays_correct_after_upsert(index_settings):
+    """Cache must serve CURRENT store contents: upsert new rows, then query."""
+    vec = embed_texts(["brand new sentence about superconductors and resistance."])[0]
+    before = vector_store.search_vectors(vec, "other_strategy", top_k=3, settings=index_settings)
+    chunk = _chunk("phys-new", "other_strategy", 9,
+                   "A new physics passage about superconductor resistance.")
+    assert vector_store.build_index(
+        [*[_chunk(f"phys{i}", "other_strategy", i, t) for i, t in enumerate(PHYSICS_TEXTS)], chunk],
+        "other_strategy",
+        settings=index_settings,
+    ) == 4
+    after = vector_store.search_vectors(vec, "other_strategy", top_k=3, settings=index_settings)
+    assert any("superconductor" in h.text.lower() for h in after[:2])
+    assert len(before) == 3 and len(after) == 3
