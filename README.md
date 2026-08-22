@@ -1,10 +1,3 @@
----
-title: voice-rag
-emoji: 🎙️
-sdk: docker
-app_port: 7860
----
-
 # HH Goa 2026 — Voice-Enabled RAG
 
 A voice-in, voice-question, grounded-answer-out RAG pipeline: **audio → speech-to-text → multi-strategy chunked retrieval over a vector DB → guardrailed answer generation**, built for the HH Goa 2026 shortlisting task on `ai4bharat/MSMARCO-XI`.
@@ -127,9 +120,13 @@ Answer generation uses **Groq** (`openai/gpt-oss-20b` — the free-tier fast gen
 
 ## Deployment
 
-Live at: **[fill in real Space URL after deploy]** — deployed as a Hugging Face Space running this repo's `Dockerfile` verbatim.
+Live at: **[fill in real URL after live verification]** — deployed on **Railway** from this repo's `Dockerfile` (single service: FastAPI backend + built frontend served same-origin).
 
-Why HF Spaces and not Render/Railway/Fly (measured, not guessed): the container idles at ~480MB *anonymous* memory (torch runtime + MiniLM + interpreter — verified inside the built image; `MALLOC_ARENA_MAX`/thread-cap mitigations moved it <2%). Render's free tier caps at 512MB total → guaranteed OOM before the first request. Spaces' free CPU tier provides 16GB, no card required, same image. Tradeoffs accepted and documented: the Space sleeps after ~48h idle (first visit pays a ~1min cold boot: container start + MiniLM warmup) — hit `/health` once before demoing.
+Platform selection was measurement-driven, not preference-driven:
+
+- **Render free — rejected on evidence.** The built image idles at ~483MB *anonymous* memory (torch runtime + MiniLM + interpreter; verified inside the running container, `MALLOC_ARENA_MAX`/thread-cap mitigations moved it <2%) against Render's 512MB total cap → guaranteed OOM before the first request.
+- **Hugging Face Spaces Docker — rejected on policy.** HF paywalled Docker Spaces behind PRO ($9/mo) in July 2026.
+- **Railway trial — chosen.** $5 credit, no card, builds the repo's Dockerfile natively. Tradeoff accepted and documented: the credit runs out after ~1-2 weeks of continuous uptime at demo-scale traffic — fine for the judging window; a permanent free home would require shrinking the embedding runtime below torch's footprint (documented future work).
 
 Deploy steps (what was actually done):
 
@@ -138,21 +135,21 @@ Deploy steps (what was actually done):
 #    so deploys never download the dataset or re-embed):
 #    .venv/bin/python scripts/export_index_snapshot.py   # → backend/data/index_snapshot.tgz (~33MB)
 
-# 1) one-time human steps: huggingface.co account → Settings → Access Tokens →
-#    create a WRITE token; hf.co/new-space → name "voice-rag", SDK=Docker, public
+# 1) railway.app → New Project → Deploy from GitHub repo → pick this repo;
+#    Railway auto-detects the root Dockerfile and injects $PORT (the CMD
+#    binds ${PORT:-7860}, so any injected value works)
 
-# 2) push the repo to the Space
-git remote add space https://huggingface.co/spaces/<your-username>/voice-rag
-git push space main        # token = password when prompted
+# 2) Service → Variables → add GROQ_API_KEY, SARVAM_API_KEY
 
-# 3) Space → Settings → Variables and secrets → add GROQ_API_KEY, SARVAM_API_KEY
+# 3) Settings → Networking → Generate Domain → target port MUST equal the
+#    port uvicorn reports in deploy logs (e.g. "Uvicorn running on ...:8080"
+#    → domain targets 8080). A mismatch here is the classic Railway 502.
 
-# 4) watch the build logs (first build ~6-8 min: CPU torch + deps + weights bake),
-#    then verify:
-curl https://<your-space-subdomain>.hf.space/health
+# 4) verify:
+curl https://<your-domain>.up.railway.app/health   # expect {"status":"ok"}
 ```
 
-The frontend is served by the backend itself from `frontend/dist` (same-origin, single service) — record voice or type a question at the Space URL root.
+The frontend is served by the backend itself from `frontend/dist` (same-origin, single service) — record voice or type a question at the domain root.
 
 
 ## Team & workflow

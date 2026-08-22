@@ -11,8 +11,8 @@ can't complete them. **No resubmissions allowed — one-shot check before Aug 22
 - [x] Retrieval index ships inside the image (`backend/data/index_snapshot.tgz`, ~33MB, extracted at build time) — deploys need no dataset download or re-embedding
 - [x] Frontend served same-origin by the backend (record button → MediaRecorder webm → POST `/ask`; transcript / answer / refusal+reason / grounding-verified caveat / latency table rendered)
 - [x] CORS configured for dev (`CORS_ORIGINS` env; prod is same-origin so no cross-origin requests exist)
-- [x] Platform chosen on measurement: HF Spaces (free CPU tier) — Render free's 512MB cap measured insufficient (~483MB anonymous idle memory in the built image; see README Deployment section)
-- [ ] ⏳ Space created + pushed (`git push space main`) and secrets set (GROQ_API_KEY, SARVAM_API_KEY) — *human step*
+- [x] Platform chosen on measurement: Railway (trial credit) — Render free's 512MB cap measured insufficient (~483MB anonymous idle memory in the built image), HF Spaces Docker PRO-paywalled July 2026; see README Deployment section
+- [ ] ⏳ Railway service deployed + public domain generated with correct target port + secrets set (GROQ_API_KEY, SARVAM_API_KEY)
 - [ ] ⏳ Live URL verified fresh: `/health` 200 + one real voice query end-to-end through the deployed UI — *human step, do right before submitting*
 - [ ] ⏳ README "Deployment" section filled with the REAL live URL (placeholder currently)
 
@@ -34,5 +34,5 @@ can't complete them. **No resubmissions allowed — one-shot check before Aug 22
 
 ```bash
 .venv/bin/python -m pytest backend/tests -q        # expect: all passing
-curl https://<space-subdomain>.hf.space/health     # expect: {"status":"ok"}
+curl https://<railway-domain>.up.railway.app/health  # expect: {"status":"ok"}
 ```
