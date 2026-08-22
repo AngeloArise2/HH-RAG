@@ -9,6 +9,7 @@ grounding_check is the second, independent one. Strictness rules:
   the query goes in the USER message, clearly delimited as data not instructions.
 """
 
+from app.benchmarking.latency import CHUNK_ASSEMBLY, stage_timer
 from app.retrieval.vector_store import RetrievedChunk
 
 SYSTEM_INSTRUCTION = """\
@@ -50,14 +51,21 @@ def build_messages(
     query: str,
     chunks: list[RetrievedChunk],
 ) -> list[dict[str, str]]:
-    """OpenAI-style chat messages: strict system rule + delimited user turn."""
-    return [
-        {"role": "system", "content": SYSTEM_INSTRUCTION},
-        {
-            "role": "user",
-            "content": USER_TEMPLATE.format(
-                numbered_chunks=build_context_block(chunks),
-                query=query.strip(),
-            ),
-        },
-    ]
+    """OpenAI-style chat messages: strict system rule + delimited user turn.
+
+    This IS the query-time chunking work (render top-k retrieved chunks into
+    the context window), so it is timed as CHUNK_ASSEMBLY — one of the three
+    retrieval-budget stages. Uses the ambient request trace when one is set
+    (run_pipeline sets it); silently untracked in standalone scripts.
+    """
+    with stage_timer(CHUNK_ASSEMBLY):
+        return [
+            {"role": "system", "content": SYSTEM_INSTRUCTION},
+            {
+                "role": "user",
+                "content": USER_TEMPLATE.format(
+                    numbered_chunks=build_context_block(chunks),
+                    query=query.strip(),
+                ),
+            },
+        ]

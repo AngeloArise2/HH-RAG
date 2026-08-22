@@ -29,6 +29,8 @@ from app.benchmarking.latency import (
     GUARDRAIL_CHECK,
     STT,
     LatencyTrace,
+    reset_current_trace,
+    set_current_trace,
     stage_timer,
 )
 from app.config import Settings, get_settings
@@ -110,11 +112,41 @@ def run_pipeline(
     stt_provider=None,
     llm_provider=None,
 ) -> AskResponse:
+    trace = LatencyTrace()
+    # Ambient trace lets nested library code (prompts.build_messages) record
+    # the CHUNK_ASSEMBLY stage without threading a trace object through every
+    # provider interface. MUST be reset even on exceptions — FastAPI reuses
+    # threadpool threads, and a leaked contextvar would record one request's
+    # stage timings into the next request's trace.
+    token = set_current_trace(trace)
+    try:
+        return _run_pipeline_inner(
+            audio_bytes=audio_bytes,
+            mime_type=mime_type,
+            text=text,
+            settings=settings,
+            stt_provider=stt_provider,
+            llm_provider=llm_provider,
+            trace=trace,
+        )
+    finally:
+        reset_current_trace(token)
+
+
+def _run_pipeline_inner(
+    *,
+    audio_bytes: bytes | None = None,
+    mime_type: str = "audio/webm",
+    text: str | None = None,
+    settings: Settings | None = None,
+    stt_provider=None,
+    llm_provider=None,
+    trace: LatencyTrace,
+) -> AskResponse:
     if (audio_bytes is None) == (text is None):
         raise ValueError("provide exactly one of audio_bytes or text")
 
     settings = settings or get_settings()
-    trace = LatencyTrace()
     warnings: list[str] = []
 
     # --- stage 1: speech-to-text (skipped when the query arrives as text) ---

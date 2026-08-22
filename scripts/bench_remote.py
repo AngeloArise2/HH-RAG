@@ -29,7 +29,7 @@ import httpx
 from app.benchmarking.latency import summarize
 from app.benchmarking.queries import load_real_queries
 
-STAGES = ["embed_query", "vector_search", "retrieval_ms", "generation", "guardrail_check", "total_ms"]
+STAGES = ["embed_query", "vector_search", "chunk_assembly", "retrieval_ms", "generation", "guardrail_check", "total_ms"]
 
 
 def fetch(client: httpx.Client, base_url: str, query: str) -> dict:

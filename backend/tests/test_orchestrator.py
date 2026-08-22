@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.generation.llm_client import GenerationResult, LLMError
+from app.generation.prompts import build_messages
 from app.harness.orchestrator import AskResponse, PipelineError, run_pipeline
 from app.main import app
 from app.stt.base import STTError, TranscriptResult
@@ -45,7 +46,10 @@ class FakeLLM:
     def generate(self, prompt, context_chunks):
         if self.fail:
             raise LLMError("simulated provider outage")
-        self.last_prompt = prompt
+        # mirror the real providers' contract: they build chat messages from
+        # chunks via prompts.build_messages — which is where CHUNK_ASSEMBLY
+        # gets recorded against the ambient request trace.
+        self.last_prompt = build_messages(prompt, context_chunks)
         self.last_chunks = context_chunks
         return GenerationResult(
             answer=self.answer, provider="fake", model="fake", is_mock=False
@@ -66,12 +70,18 @@ def test_full_text_pipeline_real_index_fake_llm():
     # latency trace must be populated with retrieval stages at minimum
     assert "embed_query" in response.latency_trace_ms
     assert "vector_search" in response.latency_trace_ms
+    assert "chunk_assembly" in response.latency_trace_ms
     assert "generation" in response.latency_trace_ms
-    assert response.retrieval_ms > 0
+    # retrieval budget = all three retrieval-side stages, per RETRIEVAL_STAGES
+    t = response.latency_trace_ms
+    expected_retrieval = round(
+        t["embed_query"] + t["vector_search"] + t["chunk_assembly"], 3
+    )
+    assert response.retrieval_ms == pytest.approx(expected_retrieval)
     assert response.total_ms >= response.retrieval_ms
     assert response.llm_is_mock is False
-    # LLM received the query and real retrieved chunks
-    assert llm.last_prompt == "what is incorporation"
+    # LLM received the query and real retrieved chunks, as chat messages
+    assert "what is incorporation" in llm.last_prompt[1]["content"]
     assert llm.last_chunks == response.chunks
 
 
@@ -185,3 +195,15 @@ def test_ask_endpoint_maps_pipeline_error_to_502(client, monkeypatch):
     monkeypatch.setattr("app.main.run_pipeline", boom)
     response = client.post("/ask", data={"query": "anything"})
     assert response.status_code == 502
+
+
+def test_refusal_path_has_no_chunk_assembly_stage():
+    """Input-guard refusals short-circuit BEFORE retrieval — the trace must
+    not pretend chunk work happened."""
+    response = run_pipeline(
+        text="what time is it right now",
+        settings=TEST_SETTINGS,
+        llm_provider=FakeLLM(filter_verdict="OFF_TOPIC"),
+    )
+    assert response.refused is True
+    assert "chunk_assembly" not in response.latency_trace_ms
