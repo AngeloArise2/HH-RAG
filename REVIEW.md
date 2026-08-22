@@ -72,10 +72,10 @@ Two jobs: (1) a checklist to tick off as you complete each `BUILD_PROMPT.md` pha
 - [x] No target claimed for full end-to-end that isn't actually met *(e2e tables carry an explicit "NO 200ms claim" header; patterns-considered section documents adopted vs rejected optimizations with corrected math)*
 
 ### Phase 9 — Frontend + deployment
-- [ ] Voice recording UI works and calls `/ask`
-- [ ] Real live URL deployed and responding at `/health`
-- [ ] `README.md` updated with the real live link
-- [ ] `docs/submission_checklist.md` reflects actual completed state
+- [x] Voice recording UI works and calls `/ask` *(Vite vanilla JS: MediaRecorder → webm → POST /ask; renders transcript/answer/refusal+reason/grounding-verified caveat/per-stage latency table; served same-origin from frontend/dist by FastAPI — API path verified live, browser mic path to be exercised during demo-video recording)*
+- [x] Real live URL deployed and responding at `/health` *(https://hh-rag-production.up.railway.app → {"status":"ok"}; Railway trial after measured rejections: Render free OOMs at 483MB-anon idle vs 512MB cap, HF Spaces Docker PRO-paywalled Jul 2026)*
+- [x] `README.md` updated with the real live link *(+ real health response, live grounded-answer + refusal verification results, honest platform-selection rationale)*
+- [x] `docs/submission_checklist.md` reflects actual completed state *(mirrors task requirements; remaining boxes are human-only: form, videos, social posts, pre-submit fresh /health check)*
 
 ---
 

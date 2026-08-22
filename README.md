@@ -120,7 +120,16 @@ Answer generation uses **Groq** (`openai/gpt-oss-20b` — the free-tier fast gen
 
 ## Deployment
 
-Live at: **[fill in real URL after live verification]** — deployed on **Railway** from this repo's `Dockerfile` (single service: FastAPI backend + built frontend served same-origin).
+Live at: **https://hh-rag-production.up.railway.app** — deployed on **Railway** from this repo's `Dockerfile` (single service: FastAPI backend + built frontend served same-origin).
+
+Verified live (Aug 22, 2026):
+
+```
+$ curl https://hh-rag-production.up.railway.app/health
+{"status":"ok"}
+```
+
+Real query through the deployed backend (`POST /ask`, "who owns a corporation and who shares in its profits?"): grounded answer returned, `retrieval_ms` **23.5**, `total_ms` **777.9**, `grounding_verified: true`. Off-topic probe ("what time is it right now") correctly refused with `refusal_reason: off_topic`, trace showing only `guardrail_check` — the input guard short-circuits before any embedding runs.
 
 Platform selection was measurement-driven, not preference-driven:
 

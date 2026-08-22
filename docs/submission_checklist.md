@@ -12,9 +12,10 @@ can't complete them. **No resubmissions allowed — one-shot check before Aug 22
 - [x] Frontend served same-origin by the backend (record button → MediaRecorder webm → POST `/ask`; transcript / answer / refusal+reason / grounding-verified caveat / latency table rendered)
 - [x] CORS configured for dev (`CORS_ORIGINS` env; prod is same-origin so no cross-origin requests exist)
 - [x] Platform chosen on measurement: Railway (trial credit) — Render free's 512MB cap measured insufficient (~483MB anonymous idle memory in the built image), HF Spaces Docker PRO-paywalled July 2026; see README Deployment section
-- [ ] ⏳ Railway service deployed + public domain generated with correct target port + secrets set (GROQ_API_KEY, SARVAM_API_KEY)
-- [ ] ⏳ Live URL verified fresh: `/health` 200 + one real voice query end-to-end through the deployed UI — *human step, do right before submitting*
-- [ ] ⏳ README "Deployment" section filled with the REAL live URL (placeholder currently)
+- [x] Railway service deployed, public domain live: https://hh-rag-production.up.railway.app — secrets set (GROQ_API_KEY, SARVAM_API_KEY)
+- [x] Live URL verified (Aug 22, 2026): `/health` → `{"status":"ok"}`; real grounded `/ask` answer (retrieval 23.5ms); off-topic refusal short-circuits at `guardrail_check`
+- [x] README "Deployment" section filled with the REAL live URL + real health response
+- [ ] ⏳ Voice query end-to-end through the deployed UI in a browser (mic permission) — *do once right before recording the demo video*
 
 ## Task-doc requirements (from REVIEW.md final checklist)
 
