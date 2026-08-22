@@ -6,11 +6,14 @@ const REASON_LABELS = {
   ungrounded: "draft answer failed the grounding check",
 };
 const RETRIEVAL_BUDGET_MS = 200;
+const TARGET_SAMPLE_RATE = 16000; // STT-friendly, keeps uploads small
 
-let recorder = null;
-let chunks = [];
-let recording = false;
 let mediaStream = null;
+let audioCtx = null;
+let processor = null;
+let sourceNode = null;
+let pcmChunks = [];
+let recording = false;
 
 function setStatus(text) {
   $("status").textContent = text;
@@ -37,42 +40,113 @@ function setRecordingUI(on) {
   setStatus(on ? "recording… click to stop" : "idle");
 }
 
-async function toggleRecording() {
-  if (recording) {
-    recorder.stop(); // onstop does the send
-    return;
-  }
+// --- WAV capture -------------------------------------------------------------
+// The STT provider (Sarvam) only accepts mp3/wav, and browsers' MediaRecorder
+// produces webm/opus — which got us a 400 on the deployed backend. So we skip
+// MediaRecorder entirely: capture raw mic PCM via WebAudio, downmix/resample,
+// and encode a proper WAV blob client-side.
+
+async function startRecording() {
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
     showError(`Microphone unavailable: ${err.message}`);
     return;
   }
-  const mime =
-    MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : MediaRecorder.isTypeSupported("audio/webm")
-        ? "audio/webm"
-        : "";
-  recorder = new MediaRecorder(mediaStream, mime ? { mimeType: mime } : undefined);
-  chunks = [];
-  recorder.ondataavailable = (e) => {
-    if (e.data.size > 0) chunks.push(e.data);
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  sourceNode = audioCtx.createMediaStreamSource(mediaStream);
+  // createScriptProcessor is deprecated but works everywhere; an AudioWorklet
+  // would need a separate module file — overkill for this deliberately
+  // minimal UI. Buffer size 4096 ≈ 85ms per callback at 48kHz.
+  processor = audioCtx.createScriptProcessor(4096, 1, 1);
+  pcmChunks = [];
+  processor.onaudioprocess = (e) => {
+    pcmChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
   };
-  recorder.onstop = () => {
-    mediaStream.getTracks().forEach((t) => t.stop());
-    setRecordingUI(false);
-    if (chunks.length === 0) {
-      showError("Nothing was recorded.");
-      return;
-    }
-    const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-    const fd = new FormData();
-    fd.append("file", blob, "recording.webm");
-    send(fd);
-  };
-  recorder.start();
+  sourceNode.connect(processor);
+  processor.connect(audioCtx.destination); // needed to keep the node pulled
   setRecordingUI(true);
+}
+
+function stopRecording() {
+  if (processor) {
+    processor.disconnect();
+    processor.onaudioprocess = null;
+  }
+  if (sourceNode) sourceNode.disconnect();
+  if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
+  const chunks = pcmChunks;
+  pcmChunks = [];
+  setRecordingUI(false);
+  if (!audioCtx || chunks.length === 0) {
+    showError("Nothing was recorded.");
+    return;
+  }
+  const srcRate = audioCtx.sampleRate;
+  audioCtx.close();
+  audioCtx = null;
+
+  encodeWavAsync(chunks, srcRate)
+    .then((blob) => {
+      const fd = new FormData();
+      fd.append("file", blob, "recording.wav");
+      send(fd);
+    })
+    .catch((err) => showError(`Audio encoding failed: ${err.message}`));
+}
+
+async function encodeWavAsync(chunks, srcRate) {
+  const totalLen = chunks.reduce((n, c) => n + c.length, 0);
+  const merged = new Float32Array(totalLen);
+  let off = 0;
+  for (const c of chunks) {
+    merged.set(c, off);
+    off += c.length;
+  }
+
+  let samples = merged;
+  let rate = srcRate;
+  if (srcRate !== TARGET_SAMPLE_RATE) {
+    const frames = Math.ceil((totalLen * TARGET_SAMPLE_RATE) / srcRate);
+    const offline = new OfflineAudioContext(1, frames, TARGET_SAMPLE_RATE);
+    const buf = offline.createBuffer(1, totalLen, srcRate);
+    buf.copyToChannel(merged, 0);
+    const bs = offline.createBufferSource();
+    bs.buffer = buf;
+    bs.connect(offline.destination);
+    bs.start();
+    samples = (await offline.startRendering()).getChannelData(0);
+    rate = TARGET_SAMPLE_RATE;
+  }
+  return encodeWav(samples, rate);
+}
+
+function encodeWav(samples, sampleRate) {
+  const dataBytes = samples.length * 2;
+  const buf = new ArrayBuffer(44 + dataBytes);
+  const v = new DataView(buf);
+  const writeStr = (o, s) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  v.setUint32(4, 36 + dataBytes, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  v.setUint32(16, 16, true); // PCM chunk size
+  v.setUint16(20, 1, true); // format = PCM
+  v.setUint16(22, 1, true); // channels = mono
+  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * 2, true); // byte rate
+  v.setUint16(32, 2, true); // block align
+  v.setUint16(34, 16, true); // bits per sample
+  writeStr(36, "data");
+  v.setUint32(40, dataBytes, true);
+  let o = 44;
+  for (let i = 0; i < samples.length; i++, o += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buf], { type: "audio/wav" });
 }
 
 async function sendText() {
@@ -149,6 +223,6 @@ function render(data) {
   );
 }
 
-$("record-btn").addEventListener("click", toggleRecording);
+$("record-btn").addEventListener("click", () => (recording ? stopRecording() : startRecording()));
 $("send-btn").addEventListener("click", sendText);
 $("text-query").addEventListener("keydown", (e) => e.key === "Enter" && sendText());
