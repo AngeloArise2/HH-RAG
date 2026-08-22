@@ -191,11 +191,18 @@ async function send(formData) {
 
 function latencyRows(trace, retrievalMs, totalMs) {
   const rows = Object.entries(trace || {}).map(([stage, ms]) => ({
-    stage,
+    // "+" prefix marks the rows that sum into the retrieval total below
+    stage: RETRIEVAL_STAGE_NAMES.has(stage) ? `+ ${stage}` : stage,
     ms,
-    highlight: RETRIEVAL_STAGE_NAMES.has(stage), // these ARE the 200ms criterion
+    highlight: RETRIEVAL_STAGE_NAMES.has(stage),
   }));
-  rows.push({ stage: "retrieval_ms (budget 200)", ms: retrievalMs, highlight: true });
+  const underBudget = retrievalMs < RETRIEVAL_BUDGET_MS;
+  rows.push({
+    stage: "retrieval_ms — sum of the + rows",
+    ms: retrievalMs,
+    highlight: true,
+    note: underBudget ? "✓ under 200ms" : "✗ OVER 200ms",
+  });
   rows.push({ stage: "total_ms", ms: totalMs });
   return rows;
 }
@@ -233,7 +240,11 @@ function render(data) {
       if (r.highlight && r.ms <= RETRIEVAL_BUDGET_MS) tr.className = "ok";
       if (r.highlight && r.ms > RETRIEVAL_BUDGET_MS) tr.className = "over";
       tr.append(Object.assign(document.createElement("td"), { textContent: r.stage }));
-      tr.append(Object.assign(document.createElement("td"), { textContent: Number(r.ms).toFixed(1) }));
+      tr.append(
+        Object.assign(document.createElement("td"), {
+          textContent: Number(r.ms).toFixed(1) + (r.note ? `  ${r.note}` : ""),
+        })
+      );
       return tr;
     })
   );
