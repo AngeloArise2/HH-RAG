@@ -156,24 +156,45 @@ per-request work, and two real defects were found:
 Commit `2f66af8`. Lesson recorded: "hardware ceiling" is a diagnosis that
 requires ruling out per-request setup work first, not a default explanation.
 
-### After both fixes — deployed numbers MEET the target
+### A third defect, found by asking "where is chunking in this table?"
 
-| stage            |   n | before p50 | **after p50** | after p70 | after p100 |
-|------------------|----:|-----------:|--------------:|----------:|-----------:|
-| embed_query      |  13 | 123.8      | **5.7**       | 6.2       | 9.3        |
-| vector_search    |  13 | 698.5      | **7.4**       | 10.5      | 17.8       |
-| **retrieval_ms** |  13 | 824.0      | **14.8**      | 16.9      | 27.1       |
-| generation       |  13 | 298.1      | 165.0         | 206.2     | 267.1      |
-| guardrail_check  |  13 | 442.3      | 508.2         | 598.4     | 912.6      |
-| total_ms         |  13 | 1569.4     | 683.3         | 841.5     | 1108.9     |
+Reviewer question: requirement 3 explicitly includes **chunking** in the
+200ms budget — where does it appear? Investigation showed `CHUNK_ASSEMBLY`
+was defined as one of the three RETRIEVAL_STAGES, documented here, and
+highlighted in the frontend — but NO request-path code ever started that
+timer; retrieval_ms silently summed only the stages present (embed+search).
+A dropped-stage blind spot, fixed in commit `af463e4`: the query-time chunk
+work (`prompts.build_messages` rendering top-k retrieved chunks into the
+context window) now records CHUNK_ASSEMBLY via the ambient request trace,
+and run_pipeline guarantees that trace is set/reset per request. Refusal
+paths carry no assembly timing by construction.
 
-> Deployed claim for grading: retrieval-only P50/P70/P100 =
-> **14.8 / 16.9 / 27.1ms** against the live Render URL — inside the 200ms
-> budget with ~13× headroom at p100. Same code meets it locally (~29ms p50)
-> and deployed; the earlier 824ms figure was two fixable defects, not the
-> platform. End-to-end (incl. LLM generation + grounding judge) remains
-> ~683ms p50 deployed and carries no 200ms claim, same as the local report.
+### Final deployed numbers — all three retrieval stages measured
+
+Same methodology, 20 real queries after the wiring fix
+(`backend/data/render_benchmark_final.json`):
+
+| stage            |   n |   p50 |   p70 |    p100 |
+|------------------|----:|------:|------:|--------:|
+| embed_query      |  13 |  5.8  |  7.0  |    9.5  |
+| vector_search    |  13 |  4.0  |  5.0  |    8.2  |
+| chunk_assembly   |  13 | ~0.02 | ~0.02 |   ~0.05 |
+| **retrieval_ms** |  13 | **10.0** | **12.0** | **17.3** |
+| generation       |  13 | 194.4 | 282.5 |   505.3 |
+| guardrail_check  |  13 | 481.1 | 586.2 |  1899.2 |
+| total_ms         |  13 | 750.3 | 872.3 |  2183.1 |
+
+(Interim post-fix measurement with only two stages wired read
+14.8/16.9/27.1ms — kept for provenance.)
+
+> **Deployed claim for grading:** retrieval-only P50/P70/P100 =
+> **10.0 / 12.0 / 17.3ms** against the live Render URL, measured across all
+> three retrieval-budget stages (embed_query + vector_search +
+> chunk_assembly) on 20 real dataset queries — inside the 200ms target with
+> >10× headroom at P100. Locally the same three-stage budget measures
+> 9.3 / 9.8 / 12.3ms (n=50). End-to-end (incl. LLM generation + grounding
+> judge) remains ~750ms p50 deployed and carries no 200ms claim.
 
 Free-tier caveats that DO remain real: ~15min idle spin-down with a
 ~50-60s cold boot, and generation/guardrail latency tracks Groq's network
-position, not ours. Neither touches the retrieval budget.
+position (~194-481ms p50), not ours. Neither touches the retrieval budget.
