@@ -11,6 +11,12 @@ Retry/timeout policy mirrors the STT layer (stt/base.py): 3 attempts,
 exponential backoff (0.5s -> 1s -> 2s), retrying timeouts / transport errors /
 429 / 5xx; permanent failures (401 bad key, 400 bad request) fail fast. Every
 failure surfaces as LLMError so the orchestrator can degrade gracefully.
+
+Model fallback: Groq rate buckets are PER MODEL, so when the primary model's
+daily quota is exhausted (429 TPD) a backup model under the same API key
+still has its own bucket. GroqLLM therefore walks [primary] + backups per
+call and reports which model actually answered — primary stays primary;
+backups engage only on failure.
 """
 
 import logging
@@ -127,10 +133,16 @@ class GroqLLM:
         timeout_seconds: float = 30.0,
         http_transport: httpx.BaseTransport | None = None,
         reasoning_effort: str | None = None,
+        backup_models: list[str] | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("GroqLLM requires an API key")
         self.model = model
+        # Fallback chain, primary first, deduped. Empty names dropped so a
+        # misconfigured GROQ_BACKUP_MODELS="" degrades to no backups quietly.
+        self._model_chain = [model] + [
+            b for b in (backup_models or []) if b and b != model
+        ]
         self.timeout_seconds = timeout_seconds
         # reasoning models (gpt-oss family) burn tokens thinking before the
         # answer; without this knob + enough max_tokens the content comes
@@ -147,21 +159,25 @@ class GroqLLM:
             else None,
         )
 
-    def _completion_kwargs(self, max_tokens: int) -> dict:
+    def _completion_kwargs(self, max_tokens: int, model: str | None = None) -> dict:
         kwargs = {"temperature": 0.0, "max_tokens": max_tokens}
-        if self.reasoning_effort is not None:
+        # The reasoning knob only exists on the gpt-oss family — sending it to
+        # a llama/qwen backup is a 400. Scope it to the model being called,
+        # not the primary, since the chain mixes families.
+        effective = model if model is not None else self.model
+        if self.reasoning_effort is not None and "gpt-oss" in effective.lower():
             kwargs["reasoning_effort"] = self.reasoning_effort
         return kwargs
 
-    def generate(self, prompt: str, context_chunks: list[RetrievedChunk]) -> GenerationResult:
-        messages = build_messages(prompt, context_chunks)
+    def _chat_once(self, messages: list[dict], model: str, max_tokens: int) -> str:
+        """One chat completion against ONE model, under the shared retry policy."""
 
         def send_once() -> str:
             try:
                 response = self._client.chat.completions.create(
-                    model=self.model,
+                    model=model,
                     messages=messages,
-                    **self._completion_kwargs(GENERATION_MAX_TOKENS),
+                    **self._completion_kwargs(max_tokens, model),
                 )
             except Exception as exc:  # SDK boundary -> typed failure taxonomy
                 raise classify_sdk_error(exc) from exc
@@ -173,32 +189,51 @@ class GroqLLM:
                 raise LLMError("model returned an empty completion")
             return content
 
-        answer = _chat_with_retry(send_once=send_once)
-        return GenerationResult(answer=answer, provider="groq", model=self.model)
+        return _chat_with_retry(send_once=send_once)
+
+    def _chat(self, messages: list[dict], max_tokens: int) -> tuple[str, str]:
+        """Walk the model chain until one answers; returns (text, model_used).
+
+        Each entry gets the full retry policy first — a transient blip on a
+        healthy model should NOT skip to the next one. Only after a model's
+        attempts are exhausted (e.g. 429 TPD, which retrying cannot fix until
+        tomorrow) does the chain move on. The final error names every model
+        tried, so an exhausted chain stays diagnosable.
+        """
+        errors: list[str] = []
+        for i, model in enumerate(self._model_chain):
+            try:
+                return self._chat_once(messages, model, max_tokens), model
+            except LLMError as exc:
+                errors.append(f"{model}: {exc}")
+                nxt = self._model_chain[i + 1] if i + 1 < len(self._model_chain) else None
+                if nxt:
+                    logger.warning(
+                        "LLM model %s unavailable (%s) — falling back to %s",
+                        model, str(exc)[:140], nxt,
+                    )
+        raise LLMError(
+            f"all {len(self._model_chain)} model(s) failed — {' | '.join(errors)[:400]}"
+        )
+
+    def generate(self, prompt: str, context_chunks: list[RetrievedChunk]) -> GenerationResult:
+        answer, model_used = self._chat(
+            build_messages(prompt, context_chunks), GENERATION_MAX_TOKENS
+        )
+        # report the model that ACTUALLY answered, not the configured primary
+        return GenerationResult(answer=answer, provider="groq", model=model_used)
 
     def complete_raw(self, system: str, user: str, max_tokens: int = 16) -> str:
         """Bare completion under an arbitrary system prompt (guardrails use
         this; generate() is reserved for the grounded-QA template)."""
-
-        def send_once() -> str:
-            try:
-                response = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    **self._completion_kwargs(max_tokens),
-                )
-            except Exception as exc:
-                raise classify_sdk_error(exc) from exc
-            choice = response.choices[0] if response.choices else None
-            content = (choice.message.content or "").strip() if choice else ""
-            if not content:
-                raise LLMError("model returned an empty completion")
-            return content
-
-        return _chat_with_retry(send_once=send_once)
+        content, _ = self._chat(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens,
+        )
+        return content
 
 
 class GeminiLLM:
@@ -320,6 +355,9 @@ def get_llm_provider(settings: Settings | None = None):
                 api_key=settings.groq_api_key,
                 model=settings.groq_model,
                 reasoning_effort="low" if "gpt-oss" in settings.groq_model.lower() else None,
+                backup_models=[
+                    b.strip() for b in settings.groq_backup_models.split(",") if b.strip()
+                ],
             )
         logger.warning("LLM_PROVIDER=groq but GROQ_API_KEY is empty — using MOCK LLM")
         return MockLLM()

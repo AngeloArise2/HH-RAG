@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # Aug 2026: llama-3.3-70b-versatile no longer exists on Groq's free tier;
     # gpt-oss-20b is the current fast general-instruction model
     groq_model: str = "openai/gpt-oss-20b"
+    # Backup models tried IN ORDER when the primary's quota is exhausted.
+    # Groq rate buckets are per-model, so backups under the same key have
+    # their own TPD. Chain verified against GET /models on Aug 22, 2026:
+    # gpt-oss-120b (same family, bigger) then qwen3.6-27b (different family,
+    # survives a whole-family outage). Comma-separated; empties ignored.
+    groq_backup_models: str = "openai/gpt-oss-120b,qwen/qwen3.6-27b"
 
     # --- Vector store ---
     vector_store_path: str = str(_REPO_ROOT / "backend" / "data" / "index")

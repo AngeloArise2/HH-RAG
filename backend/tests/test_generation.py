@@ -4,6 +4,7 @@ Network behavior runs through an injected httpx.MockTransport inside the
 openai SDK client (GroqLLM accepts http_transport) — zero real HTTP here.
 """
 
+import json
 import logging
 
 import httpx
@@ -195,3 +196,115 @@ def test_mock_llm_flags_itself_and_uses_context():
 def test_mock_llm_without_context_says_idontknow():
     result = MockLLM().generate("q", [])
     assert "don't know" in result.answer
+
+
+# --- model fallback chain -----------------------------------------------------
+
+
+def rate_limited_response() -> httpx.Response:
+    return httpx.Response(
+        429,
+        json={"error": {"message": "Rate limit reached ... (TPD): Limit 2000"}},
+    )
+
+
+def groq_with_chain(handler, backups: list[str]) -> tuple["GroqLLM", dict]:
+    calls = {"count": 0}
+
+    def counting_handler(request):
+        calls["count"] += 1
+        return handler(request)
+
+    provider = GroqLLM(
+        api_key="k-test",
+        model="openai/gpt-oss-20b",
+        reasoning_effort="low",
+        backup_models=backups,
+        http_transport=httpx.MockTransport(counting_handler),
+    )
+    return provider, calls
+
+
+def test_fallback_engages_when_primary_quota_exhausted():
+    """The exact production failure: primary 429s on TPD, backup answers."""
+    seen_models = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        seen_models.append(body["model"])
+        if body["model"] == "openai/gpt-oss-20b":
+            return rate_limited_response()
+        return httpx.Response(200, json=ok_completion("backup answer"))
+
+    provider, calls = groq_with_chain(handler, ["openai/gpt-oss-120b"])
+    result = provider.generate("q", make_chunks())
+    assert result.answer == "backup answer"
+    assert result.model == "openai/gpt-oss-120b"  # ACTUAL model reported
+    assert seen_models == ["openai/gpt-oss-20b"] * 3 + ["openai/gpt-oss-120b"]
+    assert calls["count"] == 4  # 3 retries on primary + 1 on backup
+
+
+def test_complete_raw_also_falls_back():
+    """Guards share the chain — the input filter must not fail open just
+    because the primary hit TPD."""
+
+    def handler(req):
+        if json.loads(req.content)["model"] == "openai/gpt-oss-20b":
+            return rate_limited_response()
+        return httpx.Response(200, json=ok_completion("ON_TOPIC"))
+
+    provider, _ = groq_with_chain(handler, ["openai/gpt-oss-120b", "qwen/qwen3.6-27b"])
+    assert provider.complete_raw("classify this", "hello") == "ON_TOPIC"
+
+
+def test_second_backup_used_when_first_backup_also_fails():
+    def handler(req):
+        if json.loads(req.content)["model"] == "qwen/qwen3.6-27b":
+            return httpx.Response(200, json=ok_completion("qwen answer"))
+        return rate_limited_response()
+
+    provider, calls = groq_with_chain(handler, ["openai/gpt-oss-120b", "qwen/qwen3.6-27b"])
+    result = provider.generate("q", make_chunks())
+    assert result.answer == "qwen answer"
+    assert result.model == "qwen/qwen3.6-27b"
+    assert calls["count"] == 7  # 3 + 3 retries then one success
+
+
+def test_all_models_exhausted_raises_llm_error_naming_them():
+    provider, calls = groq_with_chain(lambda req: rate_limited_response(),
+                                      ["openai/gpt-oss-120b"])
+    with pytest.raises(LLMError, match="all 2 model\\(s\\) failed"):
+        provider.generate("q", make_chunks())
+    assert calls["count"] == 6  # full retry budget spent on BOTH models
+
+
+def test_reasoning_effort_only_sent_to_gpt_oss_family():
+    """llama/qwen backups would 400 on reasoning_effort — it must be scoped
+    per model in the chain, not applied chain-wide."""
+    bodies = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        bodies.append((body["model"], sorted(body.keys())))
+        if body["model"] == "openai/gpt-oss-20b":
+            return rate_limited_response()  # force the chain onto the backup
+        return httpx.Response(200, json=ok_completion())
+
+    provider, _ = groq_with_chain(handler, ["qwen/qwen3.6-27b"])
+    provider.generate("q", make_chunks())
+    gpt_keys = dict(bodies)["openai/gpt-oss-20b"]
+    qwen_keys = dict(bodies)["qwen/qwen3.6-27b"]
+    assert "reasoning_effort" in gpt_keys
+    assert "reasoning_effort" not in qwen_keys
+
+
+def test_duplicate_backups_deduped_and_empties_dropped():
+    def handler(req):
+        return httpx.Response(200, json=ok_completion())
+
+    provider = GroqLLM(
+        api_key="k",
+        model="openai/gpt-oss-20b",
+        backup_models=["openai/gpt-oss-20b", "", "qwen/qwen3.6-27b"],
+    )
+    assert provider._model_chain == ["openai/gpt-oss-20b", "qwen/qwen3.6-27b"]

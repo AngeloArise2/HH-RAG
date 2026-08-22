@@ -221,6 +221,9 @@ def _run_pipeline_inner(
                 generation = llm.generate(query, chunks)
             answer = generation.answer
             llm_is_mock = generation.is_mock
+            # report the model that ACTUALLY answered — GroqLLM may have
+            # fallen back to a backup after the primary's quota ran out
+            llm_model = generation.model or llm_model
         except LLMError as exc:
             # degrade, don't die: chunks are still valuable output
             msg = f"generation failed ({exc}); returning ungrounded-free empty answer"
