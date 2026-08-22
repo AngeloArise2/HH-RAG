@@ -131,7 +131,7 @@ $ curl https://voice-rag-j9oh.onrender.com/health
 
 Real query through the deployed backend (`POST /ask`, "who owns a corporation and who shares in its profits?"): grounded answer returned — *"A corporation is owned by its stockholders (shareholders), and those shareholders share in the corporation's profits."* — with `grounding_verified: true`. Off-topic probe ("what time is it right now") correctly refused (`refusal_reason: off_topic`) with only `guardrail_check` in the trace (278ms) — the input guard short-circuits before any embedding runs. During a 20-query benchmark against this deployment, guardrails refused 7 more real dataset queries: 2 unsafe, 4 ungrounded, 1 off-topic.
 
-**Deployed latency, reported honestly:** retrieval-only P50/P70/P100 on this deployment is **824 / 892 / 1160ms** — over the 200ms target. The code is unchanged from the configuration that measures **~29ms p50 retrieval locally**; Render's free instance provides **0.1 shared CPU**, and both ONNX inference and HNSW search are CPU-bound (~25-30× slowdown stage-by-stage). We report both numbers rather than tuning the benchmark to pass: full breakdown and analysis in `docs/latency_report.md`. The <200ms spec is met by the system on adequate CPU; the free tier trades latency for $0.
+**Deployed latency:** retrieval-only P50/P70/P100 on this deployment is **14.8 / 16.9 / 27.1ms** — inside the 200ms budget, measured against the live URL with real dataset queries (`scripts/bench_remote.py`; full before/after breakdown in `docs/latency_report.md`). The first deployed benchmark read 824ms p50 and was initially misread as a hardware ceiling; it was actually two fixable defects (per-request Chroma collection reopen + ONNX thread pools auto-sized to host cores on a 0.1-CPU container), both fixed in `2f66af8`. End-to-end (including LLM generation + grounding judge) runs ~683ms p50 deployed and carries no 200ms claim.
 
 Platform history — measured, not guessed:
 
@@ -158,7 +158,7 @@ git push origin main
 curl https://<service>.onrender.com/health   # expect {"status":"ok"}
 ```
 
-Free-tier caveats, documented honestly: (1) the service spins down after ~15min idle; the next request pays a ~50-60s cold boot — hit `/health` once before demoing or judging. (2) The 0.1 shared CPU makes retrieval ~824ms p50 deployed vs ~29ms locally on a normal core (see `docs/latency_report.md` for the full breakdown).
+Free-tier caveats, documented honestly: (1) the service spins down after ~15min idle; the next request pays a ~50-60s cold boot — hit `/health` once before demoing or judging. (2) Generation/guardrail stages track Groq's network latency (~165-508ms p50); the retrieval budget itself is unaffected.
 
 The frontend is served by the backend itself from `frontend/dist` (same-origin, single service) — record voice or type a question at the domain root.
 
