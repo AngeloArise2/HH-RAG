@@ -58,6 +58,14 @@ Fastest by P50: **metadata_aware**; slowest: **semantic**. Latency comparison on
 
 <!-- authored-sections: preserved verbatim on rerun -->
 
+> **Runtime footnote (Aug 2026, post-phase-9):** the embedding inference
+> engine was swapped from torch/sentence-transformers to ONNX Runtime
+> (same all-MiniLM-L6-v2 weights; parity-gated at cosine = 1.000000 on real
+> corpus samples — see `docs/architecture.md`). Tables below were measured
+> under the torch runtime and are kept as-is for provenance. Effect measured
+> after the swap: embed_query p50 ~14ms -> ~6ms; retrieval-only numbers
+> improve further below the reported budget headroom.
+
 ## Requirement-3 interpretation (stated explicitly, not implied)
 
 The task spec says: *"The full process — chunking + vector DB retrieval + everything through to final output — should complete in under 200ms."* Read literally alongside requirement #1 (*"Use either Sarvam or ElevenLabs for voice-to-text"*), this is physically unsatisfiable: both mandated STT providers are hosted HTTP APIs whose round-trip alone (~1.3–1.4s measured) exceeds 200ms before any other stage runs. No submission can satisfy #1 and a literal #3 simultaneously.

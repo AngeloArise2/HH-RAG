@@ -17,18 +17,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# CPU-only torch FIRST: unpinned sentence-transformers would otherwise pull
-# ~2GB of CUDA wheels into a 512MB-RAM container image. This pin keeps the
-# runtime wheel at ~200MB and is the only torch in the image (requirements.txt
-# sees torch already satisfied).
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-
+# No torch anywhere: embeddings run on ONNX Runtime (see app/retrieval/embed.py).
+# The old sentence-transformers/torch stack idled at ~483MB anonymous RSS;
+# this image must stay comfortably under small-container budgets.
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Bake MiniLM weights into the image so container startup touches no network.
-# Must use the same model id as app/retrieval/embed.py:EMBEDDING_MODEL.
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
 # App + built frontend + pre-built retrieval index (extracted at BUILD time:
 # boot does zero extraction, zero download — just warmup, then ready)
@@ -37,6 +30,11 @@ COPY --from=frontend-build /fe/dist ./frontend/dist
 COPY backend/data/index_snapshot.tgz ./backend/data/index_snapshot.tgz
 RUN mkdir -p backend/data && tar -xzf backend/data/index_snapshot.tgz -C backend/data \
     && rm backend/data/index_snapshot.tgz
+
+# Bake the ONNX embedding runtime into the image so container startup touches
+# no network: downloads tokenizer + onnx/model.onnx into HF_HOME exactly as
+# the runtime loader will read them. Same model id as embed.py EMBEDDING_MODEL.
+RUN cd backend && python -c "from app.retrieval.embed import _session; _session()"
 
 # config.py anchors relative paths to the repo root, so the snapshot lands
 # exactly where settings.vector_store_path points regardless of cwd.

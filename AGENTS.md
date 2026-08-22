@@ -11,7 +11,7 @@ A voice-enabled RAG pipeline: **audio in → speech-to-text → multi-strategy c
 - **Backend:** Python 3.10+, FastAPI
 - **STT:** whichever of Sarvam / ElevenLabs is set in `.env` as `STT_PROVIDER` — code must support both behind one interface even though only one is "live," so switching is a config change, not a rewrite
 - **Vector store:** Chroma (in-process, local disk) — chosen for latency, not because it's the only correct choice. Don't switch to a hosted vector DB.
-- **Embeddings:** a local `sentence-transformers` model by default (no network round-trip in the hot path). Only use an API-based embedder if a phase explicitly says so.
+- **Embeddings:** all-MiniLM-L6-v2 weights, served through **ONNX Runtime** (swapped from torch/sentence-transformers in Aug 2026 for a ~170MB idle-RAM cut, parity-gated — see docs/architecture.md). No network round-trip in the hot path. Only use an API-based embedder if a phase explicitly says so.
 - **LLM generation:** whichever of Groq / Gemini is set as `LLM_PROVIDER` — Groq is the default (free tier, no card, and fast enough that it doesn't fight the latency budget); Gemini is the fallback if Groq's rate limits get hit during heavy testing or a live demo
 - **Frontend:** plain Vite + vanilla JS/React, minimal — this is not the part being graded on polish
 - **Tests:** `pytest` for backend

@@ -64,3 +64,29 @@ They are not two readings of one state, and `grounding_verified` carries no
 meaning when `refused=True` (nothing was generated, so nothing needed judging).
 The input filter has no equivalent flag because its fail-open simply lets the
 request proceed normally — the same tradeoff, applied where the cost is lower.
+
+## Embedding inference runtime: torch -> ONNX Runtime (Aug 2026, parity-gated)
+
+Post-deployment memory measurement forced a runtime swap: the container idled
+at ~483MB *anonymous* RSS — almost entirely the torch runtime that
+sentence-transformers imports — over small-container budgets (Render free
+caps at 512MB; Railway trial instances price by RAM). The fix keeps the MODEL
+and WEIGHTS identical and swaps only the inference engine:
+
+- Weights: the official `onnx/model.onnx` shipped in the
+  `sentence-transformers/all-MiniLM-L6-v2` HF repo (90MB), not a custom export.
+- Runtime: `onnxruntime` CPU + `transformers` tokenizer; pooling replicated
+  exactly per model config (attention-masked mean pool, L2 normalize).
+- `sentence-transformers`/torch are gone from requirements AND the image —
+  ST v6 imports torch eagerly even with `backend="onnx"`, so keeping the
+  package would have kept the 480MB.
+
+Gate: `backend/tests/test_embedding_parity.py` embeds ~21 real corpus
+passages/queries through BOTH paths and asserts per-sample cosine >= 0.999.
+Measured at swap time: **min = 1.000000** (identical to 6 decimals). The test
+skips where torch is absent (e.g. inside the runtime image) and doubles as a
+standing regression guard wherever torch exists.
+
+Measured effect (same cgroup methodology, idle after warmup): anon
+**483MB -> 283MB (-41%)**, image **3.04GB -> 1.61GB**, embed_query p50
+**~14ms -> ~6ms** (ORT is also faster on CPU for this model size).

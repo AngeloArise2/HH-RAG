@@ -5,10 +5,10 @@ pydantic-settings
 pytest
 httpx
 chromadb
-sentence-transformers
+onnxruntime        # embedding inference (torch/sentence-transformers dropped Aug 2026 — 480MB→~10x smaller idle RAM; parity-gated)
+transformers       # tokenizer only (no torch backend needed for this path)
 python-multipart
 tenacity
 openai            # Groq speaks the OpenAI SDK protocol (base_url override)
-httpx             # direct HTTP for STT providers + injectable test transports
-huggingface_hub   # direct import in ingestion/download_dataset.py
+huggingface_hub   # ONNX weights + tokenizer download (baked at image build)
 pyarrow           # direct import in ingestion/download_dataset.py
