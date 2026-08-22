@@ -120,22 +120,13 @@ Answer generation uses **Groq** (`openai/gpt-oss-20b` — the free-tier fast gen
 
 ## Deployment
 
-Live at: **https://hh-rag-production.up.railway.app** — deployed on **Railway** from this repo's `Dockerfile` (single service: FastAPI backend + built frontend served same-origin).
+Live at: **[fill in real URL after live verification]** — permanent home on **Render free tier**, deployed from this repo's `render.yaml` blueprint + root `Dockerfile` (single service: FastAPI backend + built frontend served same-origin).
 
-Verified live (Aug 22, 2026):
+Platform history — measured, not guessed, in three acts:
 
-```
-$ curl https://hh-rag-production.up.railway.app/health
-{"status":"ok"}
-```
-
-Real query through the deployed backend (`POST /ask`, "who owns a corporation and who shares in its profits?"): grounded answer returned, `retrieval_ms` **23.5**, `total_ms` **777.9**, `grounding_verified: true`. Off-topic probe ("what time is it right now") correctly refused with `refusal_reason: off_topic`, trace showing only `guardrail_check` — the input guard short-circuits before any embedding runs.
-
-Platform selection was measurement-driven, not preference-driven:
-
-- **Render free — rejected on evidence.** The built image idles at ~483MB *anonymous* memory (torch runtime + MiniLM + interpreter; verified inside the running container, `MALLOC_ARENA_MAX`/thread-cap mitigations moved it <2%) against Render's 512MB total cap → guaranteed OOM before the first request.
-- **Hugging Face Spaces Docker — rejected on policy.** HF paywalled Docker Spaces behind PRO ($9/mo) in July 2026.
-- **Railway trial — chosen.** $5 credit, no card, builds the repo's Dockerfile natively. Tradeoff accepted and documented: the credit runs out after ~1-2 weeks of continuous uptime at demo-scale traffic — fine for the judging window; a permanent free home would require shrinking the embedding runtime below torch's footprint (documented future work).
+1. **Render free — originally rejected.** With the torch-based embedding runtime the container idled at ~483MB *anonymous* memory (verified inside the built image; malloc/thread mitigations moved it <2%) against Render's 512MB cap → guaranteed OOM before the first request. We bridged to a Railway trial.
+2. **ONNX swap changed the math.** Embedding inference moved to ONNX Runtime (same all-MiniLM-L6-v2 weights, parity-gated at cosine = 1.000000 over real corpus samples — see `docs/architecture.md`). Measured idle anon dropped to **283MB** and the image from 3.04GB → 1.61GB.
+3. **Render free — now viable, and permanent.** 283MB fits 512MB with ~45% headroom. The Railway trial is decommissioned once Render is confirmed stable (see `docs/submission_checklist.md`).
 
 Deploy steps (what was actually done):
 
@@ -144,19 +135,19 @@ Deploy steps (what was actually done):
 #    so deploys never download the dataset or re-embed):
 #    .venv/bin/python scripts/export_index_snapshot.py   # → backend/data/index_snapshot.tgz (~33MB)
 
-# 1) railway.app → New Project → Deploy from GitHub repo → pick this repo;
-#    Railway auto-detects the root Dockerfile and injects $PORT (the CMD
-#    binds ${PORT:-7860}, so any injected value works)
+# 1) push the repo (Render deploys from GitHub):
+git push origin main
 
-# 2) Service → Variables → add GROQ_API_KEY, SARVAM_API_KEY
+# 2) dashboard.render.com → New → Blueprint → select AngeloArise2/HH-RAG;
+#    render.yaml pre-configures service name, Docker runtime, free plan,
+#    /health check. Paste GROQ_API_KEY + SARVAM_API_KEY when prompted
+#    (sync:false → values live only in Render's vault).
 
-# 3) Settings → Networking → Generate Domain → target port MUST equal the
-#    port uvicorn reports in deploy logs (e.g. "Uvicorn running on ...:8080"
-#    → domain targets 8080). A mismatch here is the classic Railway 502.
-
-# 4) verify:
-curl https://<your-domain>.up.railway.app/health   # expect {"status":"ok"}
+# 3) first build ~5-8 min; then verify:
+curl https://<service>.onrender.com/health   # expect {"status":"ok"}
 ```
+
+Free-tier caveat, documented honestly: the service spins down after ~15min idle; the next request pays a ~50-60s cold boot (container start + MiniLM warmup). Hit `/health` once before demoing or judging.
 
 The frontend is served by the backend itself from `frontend/dist` (same-origin, single service) — record voice or type a question at the domain root.
 

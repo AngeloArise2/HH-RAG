@@ -1,0 +1,14 @@
+# Render blueprint: https://render.com/docs/blueprint-spec
+# Deploy via Render dashboard -> New -> Blueprint -> pick this repo.
+# Render builds the root Dockerfile; the CMD honors Render's injected PORT.
+services:
+  - type: web
+    name: voice-rag
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false   # value entered in dashboard, never in git
+      - key: SARVAM_API_KEY
+        sync: false
