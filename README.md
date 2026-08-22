@@ -199,6 +199,4 @@ Providers are set via `.env`: `STT_PROVIDER=sarvam|elevenlabs`, `LLM_PROVIDER=gr
 
 Built with OpenCode in phased commits (`phase N:` history in git log), phase-scoped reviews tracked in `REVIEW.md`, engineering rules enforced by `AGENTS.md` (timed stages, no fudged numbers, tests per module). See `SKILLS.md` for the concept glossary behind the design decisions.
 
-## Submission
 
-Checklist in `REVIEW.md`: form link, GitHub link, this live link, two videos, Instagram + X promotion (`#RAGInGoa`). No resubmissions allowed.
