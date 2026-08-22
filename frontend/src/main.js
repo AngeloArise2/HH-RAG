@@ -6,6 +6,9 @@ const REASON_LABELS = {
   ungrounded: "draft answer failed the grounding check",
 };
 const RETRIEVAL_BUDGET_MS = 200;
+// The 200ms criterion measures ONLY these stages (latency.py RETRIEVAL_STAGES).
+// guardrail_check/generation/stt carry no 200ms claim — see latency_report.md.
+const RETRIEVAL_STAGE_NAMES = new Set(["embed_query", "vector_search", "chunk_assembly"]);
 const TARGET_SAMPLE_RATE = 16000; // STT-friendly, keeps uploads small
 
 let mediaStream = null;
@@ -54,6 +57,7 @@ async function startRecording() {
     return;
   }
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") await audioCtx.resume();
   sourceNode = audioCtx.createMediaStreamSource(mediaStream);
   // createScriptProcessor is deprecated but works everywhere; an AudioWorklet
   // would need a separate module file — overkill for this deliberately
@@ -64,7 +68,15 @@ async function startRecording() {
     pcmChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
   };
   sourceNode.connect(processor);
-  processor.connect(audioCtx.destination); // needed to keep the node pulled
+  // The processor node must reach destination or some browsers stop pulling
+  // onaudioprocess — but wiring it straight to the speakers creates a mic→
+  // speaker→mic feedback loop that contaminated every recording (the
+  // "transcripts are gibberish" bug). Zero-gain sink keeps the graph alive
+  // and silent.
+  const silentSink = audioCtx.createGain();
+  silentSink.gain.value = 0;
+  processor.connect(silentSink);
+  silentSink.connect(audioCtx.destination);
   setRecordingUI(true);
 }
 
@@ -178,7 +190,11 @@ async function send(formData) {
 }
 
 function latencyRows(trace, retrievalMs, totalMs) {
-  const rows = Object.entries(trace || {}).map(([stage, ms]) => ({ stage, ms }));
+  const rows = Object.entries(trace || {}).map(([stage, ms]) => ({
+    stage,
+    ms,
+    highlight: RETRIEVAL_STAGE_NAMES.has(stage), // these ARE the 200ms criterion
+  }));
   rows.push({ stage: "retrieval_ms (budget 200)", ms: retrievalMs, highlight: true });
   rows.push({ stage: "total_ms", ms: totalMs });
   return rows;
