@@ -120,13 +120,24 @@ Answer generation uses **Groq** (`openai/gpt-oss-20b` — the free-tier fast gen
 
 ## Deployment
 
-Live at: **[fill in real URL after live verification]** — permanent home on **Render free tier**, deployed from this repo's `render.yaml` blueprint + root `Dockerfile` (single service: FastAPI backend + built frontend served same-origin).
+Live at: **https://voice-rag-j9oh.onrender.com** — permanent home on **Render free tier**, deployed from this repo's `render.yaml` blueprint + root `Dockerfile` (single service: FastAPI backend + built frontend served same-origin).
 
-Platform history — measured, not guessed, in three acts:
+Verified live (Aug 22, 2026):
+
+```
+$ curl https://voice-rag-j9oh.onrender.com/health
+{"status":"ok"}
+```
+
+Real query through the deployed backend (`POST /ask`, "who owns a corporation and who shares in its profits?"): grounded answer returned — *"A corporation is owned by its stockholders (shareholders), and those shareholders share in the corporation's profits."* — with `grounding_verified: true`. Off-topic probe ("what time is it right now") correctly refused (`refusal_reason: off_topic`) with only `guardrail_check` in the trace (278ms) — the input guard short-circuits before any embedding runs. During a 20-query benchmark against this deployment, guardrails refused 7 more real dataset queries: 2 unsafe, 4 ungrounded, 1 off-topic.
+
+**Deployed latency, reported honestly:** retrieval-only P50/P70/P100 on this deployment is **824 / 892 / 1160ms** — over the 200ms target. The code is unchanged from the configuration that measures **~29ms p50 retrieval locally**; Render's free instance provides **0.1 shared CPU**, and both ONNX inference and HNSW search are CPU-bound (~25-30× slowdown stage-by-stage). We report both numbers rather than tuning the benchmark to pass: full breakdown and analysis in `docs/latency_report.md`. The <200ms spec is met by the system on adequate CPU; the free tier trades latency for $0.
+
+Platform history — measured, not guessed:
 
 1. **Render free — originally rejected.** With the torch-based embedding runtime the container idled at ~483MB *anonymous* memory (verified inside the built image; malloc/thread mitigations moved it <2%) against Render's 512MB cap → guaranteed OOM before the first request. We bridged to a Railway trial.
 2. **ONNX swap changed the math.** Embedding inference moved to ONNX Runtime (same all-MiniLM-L6-v2 weights, parity-gated at cosine = 1.000000 over real corpus samples — see `docs/architecture.md`). Measured idle anon dropped to **283MB** and the image from 3.04GB → 1.61GB.
-3. **Render free — now viable, and permanent.** 283MB fits 512MB with ~45% headroom. The Railway trial is decommissioned once Render is confirmed stable (see `docs/submission_checklist.md`).
+3. **Render free — redeployed, now permanent.** Memory fits with ~45% headroom. The Railway trial service is decommissioned once Render confirms stable (see `docs/submission_checklist.md`).
 
 Deploy steps (what was actually done):
 
@@ -147,7 +158,7 @@ git push origin main
 curl https://<service>.onrender.com/health   # expect {"status":"ok"}
 ```
 
-Free-tier caveat, documented honestly: the service spins down after ~15min idle; the next request pays a ~50-60s cold boot (container start + MiniLM warmup). Hit `/health` once before demoing or judging.
+Free-tier caveats, documented honestly: (1) the service spins down after ~15min idle; the next request pays a ~50-60s cold boot — hit `/health` once before demoing or judging. (2) The 0.1 shared CPU makes retrieval ~824ms p50 deployed vs ~29ms locally on a normal core (see `docs/latency_report.md` for the full breakdown).
 
 The frontend is served by the backend itself from `frontend/dist` (same-origin, single service) — record voice or type a question at the domain root.
 
