@@ -15,7 +15,9 @@ STRATEGY_NAME = "semantic"
 
 # Lazily match up to a punctuation cluster (+ trailing whitespace) or EOF.
 # Keeps offsets exact: each match span slices cleanly out of the source text.
-_SENTENCE_RE = re.compile(r".+?(?:[.!?]+(?:\s+|$)|$)", re.DOTALL)
+# Sentence terminators include ASCII (.!?) plus Devanagari danda (। U+0964)
+# and double danda (॥ U+0965) used by Hindi/Sanskrit/Nepali/Marathi etc.
+_SENTENCE_RE = re.compile(r".+?(?:[.!?।॥]+(?:\s+|$)|$)", re.DOTALL)
 
 
 def sentence_spans(text: str) -> list[tuple[int, int]]:

@@ -52,6 +52,16 @@ def test_no_terminal_punctuation_still_one_chunk():
     assert len(chunks) == 1
 
 
+def test_devanagari_danda_splits_indic_sentences():
+    text = "पहला वाक्य। दूसरा वाक्य। तीसरा वाक्य॥ चौथा वाक्य।"
+    chunks = SemanticChunker(max_words=3).chunk(_doc(text))
+    assert len(chunks) > 1
+    for i, c in enumerate(chunks):
+        assert c.text.strip()
+        if i < len(chunks) - 1:
+            assert c.text.rstrip()[-1] in "।॥", f"chunk {i} cut mid-sentence: ...{c.text[-20:]!r}"
+
+
 def test_empty_document_yields_no_chunks():
     assert SemanticChunker().chunk(_doc("")) == []
 

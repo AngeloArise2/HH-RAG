@@ -1,19 +1,22 @@
 """Local embedding layer — deliberately no network in the hot path.
 
-Model choice: **all-MiniLM-L6-v2** (unchanged weights, unchanged rationale):
-- 384-dim, ~90MB ONNX, 22M params — smallest model that still scores well on
-  English STS/retrieval benchmarks; keeps P50 latency budget realistic on CPU.
-- Trained on 1B+ English pairs incl. MS MARCO — our corpus IS MS MARCO
-  derived, so domain fit is direct rather than hopeful.
+Model choice: **paraphrase-multilingual-MiniLM-L12-v2** (quantized uint8):
+- 384-dim, ~118MB ONNX (uint8 quantized, AVX2), 12-layer BERT — supports
+  50+ languages incl. all 22 Indian languages that Sarvam STT transcribes.
+- Cross-lingual similarity: a Hindi query about "incorporation" maps near an
+  English passage about incorporation, enabling multilingual queries against
+  our English-only corpus without changing the retrieval pipeline.
+- Replaces all-MiniLM-L6-v2 (English-only, 6-layer) which blocked non-English
+  queries from producing meaningful vector similarities.
 
 Inference runtime: **direct ONNX Runtime** (swapped from torch/
 sentence-transformers, Aug 2026). Same official weights from the model repo
-(`onnx/model.onnx`); the swap exists because torch's runtime idles at
-~480MB anonymous RSS — over small-container budgets — while ORT serves
-numerically identical vectors at a fraction of that. Equivalence is gated
-by tests/test_embedding_parity.py (cosine >= 0.999 on real corpus samples;
-measured min = 1.000000). Pooling replicated exactly per the model's
-config: attention-masked mean pooling, then L2 normalize.
+(`onnx/model_quint8_avx2.onnx`); the quantized variant is chosen for broad
+x86-64 CPU compatibility (AVX2 is universal since ~2013). Pooling replicated
+exactly per the model's config: attention-masked mean pooling, then L2
+normalize. max_seq_length set to 128 (the model's sentence-transformers
+default) rather than 256 — passages and queries are short enough that this
+is sufficient and saves forward-pass time.
 
 Embeddings are L2-normalized so cosine distance == euclidean ranking; the
 store uses cosine space and reports `score = 1 - distance` as raw similarity.
@@ -24,10 +27,20 @@ from functools import lru_cache
 import numpy as np
 import onnxruntime as ort
 
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-ONNX_FILE = "onnx/model.onnx"
-EMBEDDING_DIM = 384
-MAX_SEQ_LEN = 256  # mirrors the model's tokenizer_config
+EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+ONNX_FILE = "onnx/model_quint8_avx2.onnx"  # uint8 quantized, AVX2 — broad x86-64 compat
+EMBEDDING_DIM = 384  # same dimension as the old model; no downstream shape changes
+MAX_SEQ_LEN = 128   # multilingual model's sentence-transformers default (was 256 for English-only)
+
+
+def _thread_count() -> int:
+    """ORT intra-op thread count. Runtime hot path wants 1 (deterministic, and
+    ORT auto-sizing overshoots throttled containers), but the offline index
+    build benefits from parallelism. EMBED_THREADS overrides the default.
+    """
+    import os
+
+    return max(1, int(os.environ.get("EMBED_THREADS", "1")))
 
 
 @lru_cache(maxsize=1)
@@ -39,13 +52,13 @@ def _session() -> tuple[ort.InferenceSession, object]:
     from huggingface_hub import hf_hub_download
 
     onnx_path = hf_hub_download(EMBEDDING_MODEL, ONNX_FILE)
-    # Pin thread pools to 1: ORT auto-sizes from the HOST core count, which
-    # wildly overshoots a throttled container (Render free = 0.1 shared CPU)
-    # — pool spin-up plus cross-thread contention inflated embed_query
-    # several-fold there. Single-threaded is also deterministic and plenty
-    # for one 22M-param forward pass.
+    # Default to pinning thread pools to 1: ORT auto-sizes from the HOST core
+    # count, which wildly overshoots a throttled container (Render free = 0.1
+    # shared CPU) — pool spin-up plus cross-thread contention inflated
+    # embed_query several-fold there. Single-threaded is also deterministic.
+    # The offline build path sets EMBED_THREADS (e.g. 12) for parallelism.
     opts = ort.SessionOptions()
-    opts.intra_op_num_threads = 1
+    opts.intra_op_num_threads = _thread_count()
     opts.inter_op_num_threads = 1
     session = ort.InferenceSession(
         str(onnx_path), sess_options=opts, providers=["CPUExecutionProvider"]

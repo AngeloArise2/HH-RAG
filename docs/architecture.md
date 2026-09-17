@@ -73,7 +73,7 @@ sentence-transformers imports — over small-container budgets (Render free
 caps at 512MB; Railway trial instances price by RAM). The fix keeps the MODEL
 and WEIGHTS identical and swaps only the inference engine:
 
-- Weights: the official `onnx/model.onnx` shipped in the
+- Weights (original): the official `onnx/model.onnx` shipped in the
   `sentence-transformers/all-MiniLM-L6-v2` HF repo (90MB), not a custom export.
 - Runtime: `onnxruntime` CPU + `transformers` tokenizer; pooling replicated
   exactly per model config (attention-masked mean pool, L2 normalize).
@@ -81,12 +81,57 @@ and WEIGHTS identical and swaps only the inference engine:
   ST v6 imports torch eagerly even with `backend="onnx"`, so keeping the
   package would have kept the 480MB.
 
-Gate: `backend/tests/test_embedding_parity.py` embeds ~21 real corpus
-passages/queries through BOTH paths and asserts per-sample cosine >= 0.999.
-Measured at swap time: **min = 1.000000** (identical to 6 decimals). The test
-skips where torch is absent (e.g. inside the runtime image) and doubles as a
-standing regression guard wherever torch exists.
+Gate (original swap): `backend/tests/test_embedding_parity.py` embedded ~21
+real corpus passages/queries through BOTH paths and asserted per-sample
+cosine >= 0.999. Measured at swap time: **min = 1.000000** (identical to 6
+decimals). The test skips where torch is absent and doubled as a standing
+regression guard wherever torch exists.
 
 Measured effect (same cgroup methodology, idle after warmup): anon
 **483MB -> 283MB (-41%)**, image **3.04GB -> 1.61GB**, embed_query p50
 **~14ms -> ~6ms** (ORT is also faster on CPU for this model size).
+
+## Multilingual embedding swap (Sep 2026): all-MiniLM-L6-v2 -> paraphrase-multilingual-MiniLM-L12-v2
+
+The original English-only embedder (all-MiniLM-L6-v2) made the whole pipeline
+effectively English-only: Sarvam's STT could transcribe 22 Indian languages,
+but the English-only embeddings produced meaningless vector similarities for
+non-English queries. To let a user speak or type any Indic language and get
+answers from the English corpus, the embedder was swapped for a **cross-lingual
+model**:
+
+- **Model:** `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+  (~118MB uint8-quantized ONNX, AVX2 variant `onnx/model_quint8_avx2.onnx`).
+  12-layer multilingual BERT. Supports 50+ languages including all 22 Indic
+  languages Sarvam transcribes. Cross-lingual similarity: a Hindi query about
+  "incorporation" lands near the English passage about incorporation.
+- **Tokenizer max length lowered to 128** (the model's sentence-transformers
+  default) from the old 256 — passages and queries are short enough that this
+  is sufficient and trims forward-pass time.
+- **Quantization choice:** uint8 (AVX2) chosen for broad x86-64 CPU
+  compatibility (AVX2 is universal since ~2013). Faster AVX-512/VNNI variants
+  exist but aren't safe on unknown deployment CPUs.
+- **Chunking:** semantic chunker sentence-terminator regex extended with
+  Devanagari danda (।) and double danda (॥) so it splits Indic-script
+  sentences correctly.
+
+Measured cross-lingual retrieval (real corpus, metadata_aware collection):
+a Hindi query "कंपनी के पंजीकरण की प्रक्रिया क्या है" (what is the
+incorporation process) retrieves relevant English registration passages
+(top cosine 0.60) vs an unrelated-topic cosine of ~0.02. English queries
+retrieve at similar quality to before (top 0.617). **Known limitation:**
+cross-lingual quality is uneven — Hindi maps well to English; some less-well-
+represented Indic languages (e.g. Bengali observed at cosine ~0.56 against an
+unrelated passage) retrieve more noise. This is a model-quality constraint,
+not a pipeline defect.
+
+Index principle unchanged: this is a WEIGHTS change, not an architecture one.
+The ONNX loading, mean-pooling, and L2-normalization path is identical to
+before. Because vectors live in a new model's vector space, the index was
+**fully rebuilt** (`scripts/build_index.py`, ~18 min at 12 embed threads) and
+the deployment snapshot (`index_snapshot.tgz`) regenerated.
+
+Threading note: the runtime hot path keeps ORT pinned to 1 thread
+(`intra_op_num_threads=1`) for determinism and container-overshoot safety;
+the offline `build_index.py` sets `EMBED_THREADS=12` (overrideable) to
+parallelize the bulk re-embed.

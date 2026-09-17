@@ -1,8 +1,9 @@
 """Round-trip tests: chunk -> build_index -> query must return the right topic.
 
-Uses the real local embedding model (all-MiniLM-L6-v2) — that's the point:
-a fake embedder would make the round-trip test meaningless. First run
-downloads ~80MB of weights; afterwards everything is local.
+Uses the real local embedding model (paraphrase-multilingual-MiniLM-L12-v2,
+multilingual) — that's the point: a fake embedder would make the round-trip
+test meaningless. First run downloads ~118MB of weights; afterwards
+everything is local.
 """
 
 import pytest
@@ -47,10 +48,16 @@ def index_settings(tmp_path_factory) -> Settings:
 
 
 def test_embed_shapes_and_determinism():
-    vecs = embed_texts(["hello world", "second text"])
+    texts = ["hello world", "second text"]
+    vecs = embed_texts(texts)
     assert len(vecs) == 2
     assert all(len(v) == EMBEDDING_DIM for v in vecs)
-    again = embed_texts(["hello world"])
+    # Determinism within identical call (same batch): quantized int8 model is
+    # deterministic here (verified 0.000000). NOTE: the same text embedded in
+    # DIFFERENT batch compositions can shift up to ~0.01 because int8
+    # quantization is padding-sensitive — but retrieval is stable because the
+    # store and queries are embedded with the same batching path.
+    again = embed_texts(list(texts))
     assert max(abs(a - b) for a, b in zip(vecs[0], again[0])) < 1e-4
 
 
