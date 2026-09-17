@@ -2,7 +2,7 @@
 """Build one Chroma collection per chunking strategy from real ingested data.
 
 Pipeline: processed/passages.jsonl -> each strategy's chunker -> embed all
-chunks (local multilingual MiniLM) -> persist collection under VECTOR_STORE_PATH.
+chunks (local English-only MiniLM) -> persist collection under VECTOR_STORE_PATH.
 
 Reports honest wall-clock timing per strategy. Formal per-stage latency
 instrumentation (stage_timer/LatencyTrace) lands in phase 4; this script's
@@ -18,8 +18,9 @@ import time
 from pathlib import Path
 
 # Offline bulk embed: use parallelism (the runtime hot path stays single-
-# threaded; only this offline build scales up ORT threads).
-os.environ.setdefault("EMBED_THREADS", os.environ.get("EMBED_THREADS", "12"))
+# threaded; only this offline build scales up ORT threads). An existing value
+# in the environment (EMBED_THREADS=...) always wins.
+os.environ.setdefault("EMBED_THREADS", "12")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 

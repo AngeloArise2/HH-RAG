@@ -66,15 +66,16 @@ Fastest by P50: **metadata_aware**; slowest: **semantic**. Latency comparison on
 > after the swap: embed_query p50 ~14ms -> ~6ms; retrieval-only numbers
 > improve further below the reported budget headroom.
 >
-> **Multilingual swap (Sep 2026):** the embedder was subsequently replaced
-> entirely — all-MiniLM-L6-v2 (English-only) -> paraphrase-multilingual-
-> MiniLM-L12-v2 (uint8, AVX2) — to support Indic-language queries. This is a
-> WEIGHTS change; 12 layers vs 6 so embed_query is expected to be slower than
-> the ~6ms single-threaded figure above (see `docs/architecture.md` for the
-> rationale and tradeoffs). **Retrieval latency has NOT yet been re-benchmarked
-> under the multilingual model** — the numbers in the tables below predate the
-> swap and must be re-measured before submission. The ~200ms target has ~5-10x
-> headroom, but this needs a fresh confirmation.
+> **Multilingual attempt (Sep 2026):** the embedder was temporarily replaced
+> with paraphrase-multilingual-MiniLM-L12-v2 (uint8, AVX2) to support
+> Indic-language queries, then **reverted**: the 250K-vocab tokenizer
+> (~270MB RSS) + 12-layer model pushed the full stack to ~600MB, over Render
+> free tier's 512MB cap (measured step-by-step, see `docs/architecture.md`).
+> The optimizer settings kept from that attempt (raw Rust tokenizer, ORT
+> memory-arena off) apply to the reinstated all-MiniLM-L6-v2 and only shrink
+> its footprint further; embed latency for the current model is the ~6ms
+> single-threaded figure above. Tables predate the revert and remain valid
+> under the current model.
 
 ## Requirement-3 interpretation (stated explicitly, not implied)
 

@@ -91,47 +91,60 @@ Measured effect (same cgroup methodology, idle after warmup): anon
 **483MB -> 283MB (-41%)**, image **3.04GB -> 1.61GB**, embed_query p50
 **~14ms -> ~6ms** (ORT is also faster on CPU for this model size).
 
-## Multilingual embedding swap (Sep 2026): all-MiniLM-L6-v2 -> paraphrase-multilingual-MiniLM-L12-v2
+## Multilingual attempt and revert (Sep 2026): all-MiniLM-L6-v2 -> paraphrase-multilingual-MiniLM-L12-v2 -> all-MiniLM-L6-v2
 
-The original English-only embedder (all-MiniLM-L6-v2) made the whole pipeline
-effectively English-only: Sarvam's STT could transcribe 22 Indian languages,
-but the English-only embeddings produced meaningless vector similarities for
-non-English queries. To let a user speak or type any Indic language and get
-answers from the English corpus, the embedder was swapped for a **cross-lingual
-model**:
+Attempted to let a user speak or type any Indic language (Sarvam STT
+transcribes 22) and get answers from the English corpus by swapping the
+English-only embedder for a **cross-lingual model**:
 
 - **Model:** `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
   (~118MB uint8-quantized ONNX, AVX2 variant `onnx/model_quint8_avx2.onnx`).
   12-layer multilingual BERT. Supports 50+ languages including all 22 Indic
-  languages Sarvam transcribes. Cross-lingual similarity: a Hindi query about
-  "incorporation" lands near the English passage about incorporation.
-- **Tokenizer max length lowered to 128** (the model's sentence-transformers
-  default) from the old 256 — passages and queries are short enough that this
-  is sufficient and trims forward-pass time.
-- **Quantization choice:** uint8 (AVX2) chosen for broad x86-64 CPU
-  compatibility (AVX2 is universal since ~2013). Faster AVX-512/VNNI variants
-  exist but aren't safe on unknown deployment CPUs.
-- **Chunking:** semantic chunker sentence-terminator regex extended with
-  Devanagari danda (।) and double danda (॥) so it splits Indic-script
-  sentences correctly.
+  languages Sarvam transcribes. A Hindi query about "incorporation" landed
+  near the English passage about incorporation (top cosine 0.60 vs ~0.02 for
+  an unrelated topic) — the cross-lingual retrieval worked.
+- **Chunking (kept):** semantic chunker sentence-terminator regex extended
+  with Devanagari danda (।) and double danda (॥). Model-agnostic, retained.
+- **Threading (kept):** offline `build_index.py` sets `EMBED_THREADS=12`
+  (overrideable) to parallelize the bulk re-embed; runtime stays pinned to 1.
 
-Measured cross-lingual retrieval (real corpus, metadata_aware collection):
-a Hindi query "कंपनी के पंजीकरण की प्रक्रिया क्या है" (what is the
-incorporation process) retrieves relevant English registration passages
-(top cosine 0.60) vs an unrelated-topic cosine of ~0.02. English queries
-retrieve at similar quality to before (top 0.617). **Known limitation:**
-cross-lingual quality is uneven — Hindi maps well to English; some less-well-
-represented Indic languages (e.g. Bengali observed at cosine ~0.56 against an
-unrelated passage) retrieve more noise. This is a model-quality constraint,
-not a pipeline defect.
+**Why it was reverted — measured memory budget, Render free tier 512MB:**
+the multilingual model structurally did not fit. Step-by-step live `VmRSS`
+measurements (raw `/proc/self/status`, not `ru_maxrss`):
 
-Index principle unchanged: this is a WEIGHTS change, not an architecture one.
-The ONNX loading, mean-pooling, and L2-normalization path is identical to
-before. Because vectors live in a new model's vector space, the index was
-**fully rebuilt** (`scripts/build_index.py`, ~18 min at 12 embed threads) and
-the deployment snapshot (`index_snapshot.tgz`) regenerated.
+| component | RSS (~) |
+|---|---|
+| Python + FastAPI + chromadb + onnxruntime imports | 80MB |
+| ONNX session with `enable_cpu_mem_arena=False`, BASIC graph opt | 144MB |
+| multilingual tokenizer vocab (250K tokens, `tokenizers` Rust trie) | 270MB |
+| Chroma loading a real collection | 112MB |
+| **total** | **~600MB** |
 
-Threading note: the runtime hot path keeps ORT pinned to 1 thread
-(`intra_op_num_threads=1`) for determinism and container-overshoot safety;
-the offline `build_index.py` sets `EMBED_THREADS=12` (overrideable) to
-parallelize the bulk re-embed.
+Attempts that did NOT save enough: (a) raw `tokenizers.Tokenizer` instead of
+`transformers.AutoTokenizer` — the slow Python tokenizer's overhead (~190MB)
+was removed, but the Rust trie for 250K tokens alone held ~270MB; (b) ORT
+memory-arena off (`enable_cpu_mem_arena=False`) + `ORT_ENABLE_BASIC` graph
+opt — saved ~270MB of cached workspace on the QDQ forward path, a genuine
+win kept for the English model too. Even both together left ~600MB. A ~100MB
+tokenizer-vocab trim (drop CJK/Cyrillic/Arabic scripts, ~80K tokens) was
+rejected: it lands *at* the cap and changes query tokenization vs the
+full-vocab build index, a quality risk not worth a marginal fit.
+
+**Reverted to all-MiniLM-L6-v2.** The English-only model with the retained
+optimizations idles ~300MB (in-budget) and the deploy is green again.
+Multilingual support is documented here as gated on a >1GB deployment (Render
+starter+ / railway premium) or a future lower-vocab cross-lingual model.
+`backend/tests/test_embedding_parity.py` now asserts the model id so a silent
+model swap breaks CI instead of the deployment.
+
+## Embedding runtime optimizations (kept from the multilingual attempt)
+
+- **Raw `tokenizers` Rust tokenizer instead of `transformers.AutoTokenizer`.**
+  `AutoTokenizer` builds a slow Python tokenizer alongside the fast Rust one,
+  a large extra RSS slab; the raw `Tokenizer.from_file(tokenizer.json)`
+  replaces it. Same tokens, leaner memory. Applies to any WordPiece model
+  whose repo ships `tokenizer.json`.
+- **`opts.enable_cpu_mem_arena = False`** plus
+  `ORT_ENABLE_BASIC` graph optimization. ORT's default arena caches freed
+  workspace after the first forward; disabling it returns that block to the
+  OS. Small per-request allocator cost, worth it under a 512MB ceiling.

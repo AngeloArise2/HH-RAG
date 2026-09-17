@@ -1,22 +1,23 @@
 """Local embedding layer — deliberately no network in the hot path.
 
-Model choice: **paraphrase-multilingual-MiniLM-L12-v2** (quantized uint8):
-- 384-dim, ~118MB ONNX (uint8 quantized, AVX2), 12-layer BERT — supports
-  50+ languages incl. all 22 Indian languages that Sarvam STT transcribes.
-- Cross-lingual similarity: a Hindi query about "incorporation" maps near an
-  English passage about incorporation, enabling multilingual queries against
-  our English-only corpus without changing the retrieval pipeline.
-- Replaces all-MiniLM-L6-v2 (English-only, 6-layer) which blocked non-English
-  queries from producing meaningful vector similarities.
+Model choice: **all-MiniLM-L6-v2** (English-only, fp32):
+- 384-dim, ~86MB ONNX (fp32), 6-layer BERT. English-only by design —
+  deliberately chosen over paraphrase-multilingual-MiniLM-L12-v2 (50+
+  languages, 250K-vocab tokenizer) because the multilingual variant's
+  tokenizer alone held ~270MB RSS, pushing the full stack to ~600MB over
+  Render free tier's 512MB cap. Measured, documented (see
+  docs/architecture.md), reverted. Multilingual needs a >1GB instance.
 
 Inference runtime: **direct ONNX Runtime** (swapped from torch/
 sentence-transformers, Aug 2026). Same official weights from the model repo
-(`onnx/model_quint8_avx2.onnx`); the quantized variant is chosen for broad
-x86-64 CPU compatibility (AVX2 is universal since ~2013). Pooling replicated
-exactly per the model's config: attention-masked mean pooling, then L2
-normalize. max_seq_length set to 128 (the model's sentence-transformers
-default) rather than 256 — passages and queries are short enough that this
-is sufficient and saves forward-pass time.
+(`onnx/model.onnx`, fp32). Pooling replicated exactly per the model's config:
+attention-masked mean pooling, then L2 normalize. max_seq_length 256 (the
+model's sentence-transformers default).
+
+Tokenizer: uses the raw `tokenizers` Rust library directly instead of
+`transformers.AutoTokenizer` — the latter loads a slow Python tokenizer
+alongside the fast Rust one. Raw loads leaner and avoids the ~190MB
+transformers overhead (critical inside Render's 512MB cap).
 
 Embeddings are L2-normalized so cosine distance == euclidean ranking; the
 store uses cosine space and reports `score = 1 - distance` as raw similarity.
@@ -27,10 +28,10 @@ from functools import lru_cache
 import numpy as np
 import onnxruntime as ort
 
-EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-ONNX_FILE = "onnx/model_quint8_avx2.onnx"  # uint8 quantized, AVX2 — broad x86-64 compat
-EMBEDDING_DIM = 384  # same dimension as the old model; no downstream shape changes
-MAX_SEQ_LEN = 128   # multilingual model's sentence-transformers default (was 256 for English-only)
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+ONNX_FILE = "onnx/model.onnx"  # official fp32 export
+EMBEDDING_DIM = 384
+MAX_SEQ_LEN = 256   # English-only model's sentence-transformers default
 
 
 def _thread_count() -> int:
@@ -47,11 +48,12 @@ def _thread_count() -> int:
 def _session() -> tuple[ort.InferenceSession, object]:
     """Load tokenizer + ORT session once. First call may hit disk cache only —
     deployment images bake these files at build time (no network at boot)."""
-    from transformers import AutoTokenizer
+    from tokenizers import Tokenizer
 
     from huggingface_hub import hf_hub_download
 
     onnx_path = hf_hub_download(EMBEDDING_MODEL, ONNX_FILE)
+    tok_path = hf_hub_download(EMBEDDING_MODEL, "tokenizer.json")
     # Default to pinning thread pools to 1: ORT auto-sizes from the HOST core
     # count, which wildly overshoots a throttled container (Render free = 0.1
     # shared CPU) — pool spin-up plus cross-thread contention inflated
@@ -60,11 +62,25 @@ def _session() -> tuple[ort.InferenceSession, object]:
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = _thread_count()
     opts.inter_op_num_threads = 1
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    # Disable the CPU memory arena: ORT keeps freed workspace cached in the
+    # default arena, which held a large block of RSS after the first forward
+    # (~270MB with the heavier multilingual model). Disabling it releases
+    # that memory, essential for staying under Render free tier's 512MB cap.
+    opts.enable_cpu_mem_arena = False
     session = ort.InferenceSession(
         str(onnx_path), sess_options=opts, providers=["CPUExecutionProvider"]
     )
-    tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL)
-    return session, tokenizer
+    # Use the raw Rust tokenizer — transformers.AutoTokenizer loads a slow
+    # Python tokenizer alongside the fast one, adding ~190MB for 250K vocab.
+    tok = Tokenizer.from_file(str(tok_path))
+    tok.enable_truncation(max_length=MAX_SEQ_LEN)
+    tok.enable_padding(
+        length=None,       # dynamic: pad to longest in batch
+        pad_id=0,
+        pad_token="[PAD]",
+    )
+    return session, tok
 
 
 def _assert_dim(vectors: np.ndarray) -> None:
@@ -77,20 +93,16 @@ def _assert_dim(vectors: np.ndarray) -> None:
 def _encode(texts: list[str]) -> np.ndarray:
     """Tokenize -> ORT -> masked mean pool -> L2 normalize. Mirrors the
     sentence-transformers pipeline this replaced (see module docstring)."""
-    session, tokenizer = _session()
-    enc = tokenizer(
-        texts, padding=True, truncation=True, max_length=MAX_SEQ_LEN,
-        return_tensors="np",
-    )
-    feeds = {
-        "input_ids": enc["input_ids"].astype(np.int64),
-        "attention_mask": enc["attention_mask"].astype(np.int64),
-        "token_type_ids": enc["token_type_ids"].astype(np.int64),
-    }
+    session, tok = _session()
+    encodings = tok.encode_batch(texts)
+    ids = np.array([e.ids for e in encodings], dtype=np.int64)
+    mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
+    types = np.array([e.type_ids for e in encodings], dtype=np.int64)
+    feeds = {"input_ids": ids, "attention_mask": mask, "token_type_ids": types}
     hidden = session.run(["last_hidden_state"], feeds)[0]  # (B, T, H)
-    mask = enc["attention_mask"][:, :, None].astype(np.float32)
-    pooled = (hidden * mask).sum(axis=1) / np.clip(
-        mask.sum(axis=1), a_min=1e-9, a_max=None
+    mask_f = mask[:, :, None].astype(np.float32)
+    pooled = (hidden * mask_f).sum(axis=1) / np.clip(
+        mask_f.sum(axis=1), a_min=1e-9, a_max=None
     )
     normed = pooled / np.linalg.norm(pooled, axis=1, keepdims=True)
     _assert_dim(normed)

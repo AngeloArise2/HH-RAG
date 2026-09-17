@@ -32,7 +32,7 @@ RUN mkdir -p backend/data && tar -xzf backend/data/index_snapshot.tgz -C backend
     && rm backend/data/index_snapshot.tgz
 
 # Bake the ONNX embedding runtime into the image so container startup touches
-# no network: downloads tokenizer + the multilingual ONNX weights into HF_HOME
+# no network: downloads tokenizer + the ONNX weights into HF_HOME
 # exactly as the runtime loader will read them. Same model id as the
 # EMBEDDING_MODEL constant in embed.py.
 RUN cd backend && python -c "from app.retrieval.embed import _session; _session()"
